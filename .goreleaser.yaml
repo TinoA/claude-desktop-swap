@@ -1,0 +1,37 @@
+version: 2
+
+project_name: claude-swap
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - binary: claude-swap
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  path: CHANGELOG.md
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"

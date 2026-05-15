@@ -1,0 +1,6 @@
+<type>(<scope>): <short description>
+
+<optional detailed description>
+
+BREAKING CHANGE: <description of breaking change, if any>
+Fixes: <issue reference, e.g., #123>

@@ -1,0 +1,5 @@
+claude-swap
+claude-swap.exe
+dist/
+*.test
+coverage.out
