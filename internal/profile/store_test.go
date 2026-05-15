@@ -38,6 +38,28 @@ func TestSaveAndRestore(t *testing.T) {
 	}
 }
 
+func TestRestoreClearsJournal(t *testing.T) {
+	appData := t.TempDir()
+	setupFakeAppData(t, appData)
+
+	store := newTestStore(t)
+	store.Save("test", appData) //nolint:errcheck
+
+	// Simulate a stale journal left by a previous Claude session
+	journal := filepath.Join(appData, cookiesJournalFile)
+	if err := os.WriteFile(journal, []byte("stale-journal"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Restore("test", appData); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	if _, err := os.Stat(journal); !os.IsNotExist(err) {
+		t.Error("Cookies-journal should be removed after restore")
+	}
+}
+
 func TestRestoreNonexistent(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Restore("ghost", t.TempDir()); err == nil {

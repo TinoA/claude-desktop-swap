@@ -13,7 +13,8 @@ const (
 	storeDirName    = ".claude-swap"
 	profilesDirName = "profiles"
 	currentFileName = "current"
-	cookiesFile     = "Cookies"
+	cookiesFile        = "Cookies"
+	cookiesJournalFile = "Cookies-journal"
 	localStorageDir = "Local Storage"
 	leveldbDir      = "leveldb"
 	metaFile        = "meta.json"
@@ -90,6 +91,13 @@ func (s *Store) Restore(name, appDataPath string) error {
 		filepath.Join(appDataPath, cookiesFile),
 	); err != nil {
 		return fmt.Errorf("restore cookies: %w", err)
+	}
+
+	// Remove any leftover journal so SQLite doesn't apply the previous
+	// session's uncommitted transactions on top of the restored cookies.
+	journal := filepath.Join(appDataPath, cookiesJournalFile)
+	if err := os.Remove(journal); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear cookies journal: %w", err)
 	}
 
 	lsPath := filepath.Join(appDataPath, localStorageDir, leveldbDir)
