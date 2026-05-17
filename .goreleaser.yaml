@@ -26,7 +26,6 @@ checksum:
 changelog:
   sort: asc
   use: github
-  path: CHANGELOG.md
   filters:
     exclude:
       - "^docs:"
