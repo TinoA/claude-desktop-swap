@@ -7,7 +7,7 @@ import (
 )
 
 var root = &cobra.Command{
-	Use:   "claude-swap",
+	Use:   "claude-desktop-swap",
 	Short: "Switch between Claude Desktop accounts without logging out",
 }
 
@@ -18,5 +18,5 @@ func Execute() {
 }
 
 func init() {
-	root.AddCommand(cmdSave, cmdUse, cmdList, cmdDelete, cmdStatus)
+	root.AddCommand(cmdSave, cmdAdd, cmdUse, cmdList, cmdDelete, cmdStatus)
 }

@@ -27,7 +27,7 @@ var cmdUse = &cobra.Command{
 		}
 
 		if !store.Exists(name) {
-			return fmt.Errorf("profile %q not found — run 'claude-swap list' to see available profiles", name)
+			return fmt.Errorf("profile %q not found — run 'claude-desktop-swap list' to see available profiles", name)
 		}
 
 		fmt.Println("Stopping Claude Desktop...")

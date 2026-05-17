@@ -1,13 +1,13 @@
 version: 2
 
-project_name: claude-swap
+project_name: claude-desktop-swap
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - binary: claude-swap
+  - binary: claude-desktop-swap
     env:
       - CGO_ENABLED=0
     goos:

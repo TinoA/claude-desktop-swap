@@ -41,6 +41,15 @@ var cmdSave = &cobra.Command{
 			return err
 		}
 
+		// Prime the on-disk state so the next `use <other>` switches cleanly.
+		// Skipped when --force was used (Claude is still running and reading
+		// the files we'd be wiping).
+		if !running {
+			if err := store.Restore(name, appData); err != nil {
+				return fmt.Errorf("post-save cleanup: %w", err)
+			}
+		}
+
 		fmt.Printf("Profile %q saved.\n", name)
 		return nil
 	},

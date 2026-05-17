@@ -158,6 +158,35 @@ func (s *Store) Restore(name, appDataPath string) error {
 	return s.SetCurrent(name)
 }
 
+// Wipe removes every per-account session artifact from Claude's app data,
+// leaving Claude to start from a clean slate on next launch.
+func (s *Store) Wipe(appDataPath string) error {
+	for _, f := range []string{
+		filepath.Join(appDataPath, cookiesFile),
+		filepath.Join(appDataPath, cookiesJournalFile),
+	} {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("wipe %s: %w", filepath.Base(f), err)
+		}
+	}
+	for _, d := range []string{
+		filepath.Join(appDataPath, localStorageDir, leveldbDir),
+		filepath.Join(appDataPath, indexedDBDir),
+		filepath.Join(appDataPath, sessionStorageDir),
+	} {
+		if err := os.RemoveAll(d); err != nil {
+			return fmt.Errorf("wipe %s: %w", filepath.Base(d), err)
+		}
+	}
+	return nil
+}
+
+// HasActiveSession reports whether Claude's app data currently holds a session.
+func HasActiveSession(appDataPath string) bool {
+	info, err := os.Stat(filepath.Join(appDataPath, cookiesFile))
+	return err == nil && info.Size() > 0
+}
+
 func (s *Store) List() ([]Meta, error) {
 	entries, err := os.ReadDir(filepath.Join(s.baseDir, profilesDirName))
 	if os.IsNotExist(err) {

@@ -25,7 +25,7 @@ var cmdList = &cobra.Command{
 		}
 
 		if len(profiles) == 0 {
-			fmt.Println("No profiles saved. Run 'claude-swap save <name>' to create one.")
+			fmt.Println("No profiles saved. Run 'claude-desktop-swap save <name>' to create one.")
 			return nil
 		}
 

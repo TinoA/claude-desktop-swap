@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to claude-swap.
+Thanks for your interest in contributing to claude-desktop-swap.
 
 ## Before you start
 

@@ -26,11 +26,11 @@ Switching accounts = swapping the `sessionKey`, `sessionKeyLC`, `routingHint`, `
 ## Commands (planned)
 
 ```
-claude-swap save <name>        # snapshot current session as a named profile
-claude-swap use <name>         # switch to a saved profile (kills + restarts Claude)
-claude-swap list               # list saved profiles
-claude-swap delete <name>      # remove a profile
-claude-swap status             # show which profile is active (if trackable)
+claude-desktop-swap save <name>        # snapshot current session as a named profile
+claude-desktop-swap use <name>         # switch to a saved profile (kills + restarts Claude)
+claude-desktop-swap list               # list saved profiles
+claude-desktop-swap delete <name>      # remove a profile
+claude-desktop-swap status             # show which profile is active (if trackable)
 ```
 
 ## Rules for Claude
