@@ -102,7 +102,6 @@ The active profile is tracked at `~/.claude-swap/current`.
 |----|--------|
 | macOS | Supported |
 | Windows | Planned |
-| Linux | Planned |
 
 ## Security
 

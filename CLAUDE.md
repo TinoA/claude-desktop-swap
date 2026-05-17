@@ -51,7 +51,6 @@ claude-desktop-swap status             # show which profile is active (if tracka
 |---------|-----------------------------------------------------------|
 | macOS   | `~/Library/Application Support/Claude/`                   |
 | Windows | `%APPDATA%\Claude\`                                        |
-| Linux   | `~/.config/Claude/` *(if ever supported)*                 |
 
 ## Cookie Encryption
 
