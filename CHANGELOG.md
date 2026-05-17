@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Profile snapshots now include `IndexedDB`, `Session Storage`, and `ant-did` — stale per-account state from a previous profile was invalidating the restored session and forcing a re-login
+
 ### Added
 - `save` command — snapshot the current Claude Desktop session as a named profile
 - `use` command — switch to a saved profile (kills and restarts Claude Desktop)

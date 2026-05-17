@@ -15,9 +15,12 @@ const (
 	currentFileName = "current"
 	cookiesFile        = "Cookies"
 	cookiesJournalFile = "Cookies-journal"
-	localStorageDir = "Local Storage"
-	leveldbDir      = "leveldb"
-	metaFile        = "meta.json"
+	localStorageDir    = "Local Storage"
+	leveldbDir         = "leveldb"
+	indexedDBDir       = "IndexedDB"
+	sessionStorageDir  = "Session Storage"
+	deviceIDFile       = "ant-did"
+	metaFile           = "meta.json"
 
 	dirPerm  os.FileMode = 0700
 	filePerm os.FileMode = 0600
@@ -72,6 +75,27 @@ func (s *Store) Save(name, appDataPath string) error {
 		return fmt.Errorf("copy local storage: %w", err)
 	}
 
+	if err := copyDirOptional(
+		filepath.Join(appDataPath, indexedDBDir),
+		filepath.Join(dir, indexedDBDir),
+	); err != nil {
+		return fmt.Errorf("copy indexeddb: %w", err)
+	}
+
+	if err := copyDirOptional(
+		filepath.Join(appDataPath, sessionStorageDir),
+		filepath.Join(dir, sessionStorageDir),
+	); err != nil {
+		return fmt.Errorf("copy session storage: %w", err)
+	}
+
+	if err := copyFileOptional(
+		filepath.Join(appDataPath, deviceIDFile),
+		filepath.Join(dir, deviceIDFile),
+	); err != nil {
+		return fmt.Errorf("copy device id: %w", err)
+	}
+
 	meta := Meta{Name: name, CreatedAt: time.Now()}
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
@@ -106,6 +130,24 @@ func (s *Store) Restore(name, appDataPath string) error {
 	}
 	if err := copyDir(filepath.Join(dir, leveldbDir), lsPath); err != nil {
 		return fmt.Errorf("restore local storage: %w", err)
+	}
+
+	// Wipe IndexedDB and Session Storage — these contain cached auth state
+	// (refresh tokens, etc.) that Claude rebuilds from cookies on first load.
+	// Restoring saved copies causes token conflicts and re-login prompts.
+	if err := os.RemoveAll(filepath.Join(appDataPath, indexedDBDir)); err != nil {
+		return fmt.Errorf("clear indexeddb: %w", err)
+	}
+	if err := os.RemoveAll(filepath.Join(appDataPath, sessionStorageDir)); err != nil {
+		return fmt.Errorf("clear session storage: %w", err)
+	}
+
+	didPath := filepath.Join(appDataPath, deviceIDFile)
+	if err := os.Remove(didPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear device id: %w", err)
+	}
+	if err := copyFileOptional(filepath.Join(dir, deviceIDFile), didPath); err != nil {
+		return fmt.Errorf("restore device id: %w", err)
 	}
 
 	meta, _ := s.loadMeta(name)
@@ -198,6 +240,20 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(out, in)
 	return err
+}
+
+func copyFileOptional(src, dst string) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil
+	}
+	return copyFile(src, dst)
+}
+
+func copyDirOptional(src, dst string) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil
+	}
+	return copyDir(src, dst)
 }
 
 func copyDir(src, dst string) error {
