@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -e
+
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+    echo "The following files are not gofmt'd:"
+    echo "$unformatted"
+    echo ""
+    echo "Run 'gofmt -w .' to fix."
+    exit 1
+fi

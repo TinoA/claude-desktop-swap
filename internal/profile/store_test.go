@@ -72,10 +72,10 @@ func TestRestoreReplacesAllSessionArtifacts(t *testing.T) {
 
 	// Simulate switching profiles: every per-account artifact now belongs to a different session.
 	for path, content := range map[string]string{
-		filepath.Join(appData, cookiesFile):                                  "other-cookies",
-		filepath.Join(appData, deviceIDFile):                                 "other-device",
-		filepath.Join(appData, indexedDBDir, idbOriginDir, "000001.log"):     "other-idb",
-		filepath.Join(appData, sessionStorageDir, "000001.log"):              "other-ss",
+		filepath.Join(appData, cookiesFile):                              "other-cookies",
+		filepath.Join(appData, deviceIDFile):                             "other-device",
+		filepath.Join(appData, indexedDBDir, idbOriginDir, "000001.log"): "other-idb",
+		filepath.Join(appData, sessionStorageDir, "000001.log"):          "other-ss",
 	} {
 		mustWriteFile(t, path, content)
 	}
@@ -388,12 +388,12 @@ func setupFakeAppData(t *testing.T, dir string) {
 	ssDir := filepath.Join(dir, sessionStorageDir)
 
 	for path, content := range map[string]string{
-		filepath.Join(dir, cookiesFile):       "fake-cookies",
-		filepath.Join(lsDir, "CURRENT"):       "MANIFEST-000001\n",
-		filepath.Join(lsDir, "000001.ldb"):    "fake-ldb-data",
-		filepath.Join(idbDir, "000001.log"):   "fake-idb",
-		filepath.Join(ssDir, "000001.log"):    "fake-ss",
-		filepath.Join(dir, deviceIDFile):      "fake-device-id",
+		filepath.Join(dir, cookiesFile):     "fake-cookies",
+		filepath.Join(lsDir, "CURRENT"):     "MANIFEST-000001\n",
+		filepath.Join(lsDir, "000001.ldb"):  "fake-ldb-data",
+		filepath.Join(idbDir, "000001.log"): "fake-idb",
+		filepath.Join(ssDir, "000001.log"):  "fake-ss",
+		filepath.Join(dir, deviceIDFile):    "fake-device-id",
 	} {
 		mustWriteFile(t, path, content)
 	}

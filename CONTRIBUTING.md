@@ -30,6 +30,19 @@ The platform abstraction lives in `internal/platform/`. To add a new OS:
 go test -v -race ./...
 ```
 
+## Git hooks
+
+This repo ships hooks under `.githooks/` to catch broken builds before they hit the remote. Enable them locally with:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+| Hook | Runs | What it checks |
+|------|------|----------------|
+| `pre-commit` | every commit | `gofmt -l .` — fails if any file isn't formatted |
+| `pre-push` | every push | `go vet ./...` + `go test ./...` |
+
 ## Commit style
 
 Use [Conventional Commits](https://www.conventionalcommits.org/). A `.gitmessage` template is included in the repo — activate it locally with:

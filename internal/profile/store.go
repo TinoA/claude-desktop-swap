@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	storeDirName    = ".claude-swap"
-	profilesDirName = "profiles"
-	currentFileName = "current"
+	storeDirName       = ".claude-swap"
+	profilesDirName    = "profiles"
+	currentFileName    = "current"
 	cookiesFile        = "Cookies"
 	cookiesJournalFile = "Cookies-journal"
 	localStorageDir    = "Local Storage"
