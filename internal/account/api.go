@@ -18,7 +18,6 @@ var defaultClient = &http.Client{Timeout: 10 * time.Second}
 
 // orgResponse covers the known shapes of the /api/organizations response.
 type orgResponse struct {
-	Email        string          `json:"email"`
 	Capabilities json.RawMessage `json:"capabilities"`
 	Settings     struct {
 		Tier string `json:"tier"`
@@ -30,7 +29,7 @@ type orgResponse struct {
 }
 
 type accountResponse struct {
-	Email string `json:"email"`
+	Email string `json:"email_address"`
 }
 
 // fetchFromAPI calls the Claude.ai API using a decrypted sessionKey cookie and
@@ -38,18 +37,21 @@ type accountResponse struct {
 func fetchFromAPI(sessionKey string) (Info, error) {
 	info := Info{}
 
+	// The account holds several orgs (chat, API, ...); take the first that
+	// resolves to a subscription plan.
 	orgs, err := getJSON[[]orgResponse](orgsEndpoint, sessionKey)
-	if err == nil && len(orgs) > 0 {
-		info.Plan = parsePlan(orgs[0])
-		info.Email = orgs[0].Email
+	if err == nil {
+		for _, org := range orgs {
+			if plan := parsePlan(org); plan != "" {
+				info.Plan = plan
+				break
+			}
+		}
 	}
 
-	// Some API versions omit email from the org response — try the account endpoint.
-	if info.Email == "" {
-		acc, err := getJSON[accountResponse](accountEndpoint, sessionKey)
-		if err == nil {
-			info.Email = acc.Email
-		}
+	acc, err := getJSON[accountResponse](accountEndpoint, sessionKey)
+	if err == nil {
+		info.Email = acc.Email
 	}
 
 	return info, nil
