@@ -115,6 +115,7 @@ func (s *fakeSwitchStore) Restore(name, path string) error {
 type fakePlatform struct {
 	events    *([]string)
 	appData   string
+	running   bool
 	launchErr error
 }
 
@@ -122,7 +123,7 @@ func (p *fakePlatform) AppDataPath() (string, error) {
 	*p.events = append(*p.events, "app-data")
 	return p.appData, nil
 }
-func (p *fakePlatform) IsRunning() (bool, error) { return false, nil }
+func (p *fakePlatform) IsRunning() (bool, error) { return p.running, nil }
 func (p *fakePlatform) KillApp() error           { *p.events = append(*p.events, "stop"); return nil }
 func (p *fakePlatform) LaunchApp() error         { *p.events = append(*p.events, "launch"); return p.launchErr }
 

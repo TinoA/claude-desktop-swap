@@ -1,17 +1,33 @@
 package cmd
 
-import "testing"
+import (
+	"bytes"
+	"reflect"
+	"testing"
+)
 
-func TestValidateSaveStateRefusesRunningClaudeEvenWithForce(t *testing.T) {
-	for _, force := range []bool{false, true} {
-		if err := validateSaveState(true, force); err == nil {
-			t.Fatalf("running save with force=%v should fail", force)
-		}
+func TestSaveProfileStopsCheckpointsAndRelaunchesWhenRunning(t *testing.T) {
+	events := []string{}
+	store := &fakeSwitchStore{events: &events}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	if err := saveProfileWith("work", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app-data", "stop", "checkpoint:work", "launch"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }
 
-func TestValidateSaveStateAllowsQuiescentCheckpoint(t *testing.T) {
-	if err := validateSaveState(false, false); err != nil {
-		t.Fatalf("quiescent save: %v", err)
+func TestSaveProfileCheckpointsWithoutTouchingAppWhenStopped(t *testing.T) {
+	events := []string{}
+	store := &fakeSwitchStore{events: &events}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: false}
+	if err := saveProfileWith("work", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app-data", "checkpoint:work"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
 	}
 }

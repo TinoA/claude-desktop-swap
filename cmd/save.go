@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
@@ -13,46 +15,44 @@ var cmdSave = &cobra.Command{
 	Short: "Save the current session as a named profile",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-
-		p := platform.Current()
-		appData, err := p.AppDataPath()
-		if err != nil {
-			return err
-		}
-
-		running, err := p.IsRunning()
-		if err != nil {
-			return err
-		}
-		if running {
-			force, _ := cmd.Flags().GetBool("force")
-			if err := validateSaveState(running, force); err != nil {
-				return err
-			}
-		}
-
 		store, err := profile.NewStore()
 		if err != nil {
 			return err
 		}
-
-		if err := store.Checkpoint(name, appData); err != nil {
-			return err
-		}
-
-		fmt.Printf("Profile %q saved.\n", name)
-		return nil
+		return saveProfileWith(args[0], store, platform.Current(), os.Stdout)
 	},
 }
 
-func validateSaveState(running, force bool) error {
-	if running {
-		return fmt.Errorf("Claude Desktop is running; quit it before saving so Cookies can be checkpointed safely")
-	}
-	return nil
+type saveStore interface {
+	Checkpoint(string, string) error
 }
 
-func init() {
-	cmdSave.Flags().Bool("force", false, "deprecated; saving while Claude Desktop is running is refused")
+func saveProfileWith(name string, store saveStore, p platform.Platform, out io.Writer) error {
+	appData, err := p.AppDataPath()
+	if err != nil {
+		return err
+	}
+	running, err := p.IsRunning()
+	if err != nil {
+		return err
+	}
+	if running {
+		fmt.Fprintln(out, "Stopping Claude Desktop...")
+		if err := p.KillApp(); err != nil {
+			return fmt.Errorf("stop Claude: %w", err)
+		}
+	}
+
+	if err := store.Checkpoint(name, appData); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Profile %q saved.\n", name)
+
+	if running {
+		fmt.Fprintln(out, "Starting Claude Desktop...")
+		if err := p.LaunchApp(); err != nil {
+			return fmt.Errorf("profile %q saved but Claude could not restart; launch manually: %w", name, err)
+		}
+	}
+	return nil
 }
