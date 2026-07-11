@@ -37,6 +37,8 @@ type Meta struct {
 	Name           string    `json:"name"`
 	CreatedAt      time.Time `json:"created_at"`
 	LastUsed       time.Time `json:"last_used,omitempty"`
+	Email          string    `json:"email,omitempty"`
+	Plan           string    `json:"plan,omitempty"`
 	FormatVersion  int       `json:"format_version,omitempty"`
 	SavedAt        time.Time `json:"saved_at,omitempty"`
 	ObservedHealth Health    `json:"observed_health,omitempty"`
@@ -107,6 +109,14 @@ func (s *Store) Checkpoint(name, appDataPath string) error {
 	if err := copyFile(live, stagedCookies); err != nil {
 		return fmt.Errorf("stage cookies: %w", err)
 	}
+	liveLevelDB := filepath.Join(appDataPath, localStorageDir, leveldbDir)
+	if info, err := os.Stat(liveLevelDB); err == nil && info.IsDir() {
+		if err := copyDir(liveLevelDB, filepath.Join(stage, localStorageDir, leveldbDir)); err != nil {
+			return fmt.Errorf("stage Local Storage: %w", err)
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	digest, err := cookieDigest(stagedCookies)
 	if err != nil {
 		return err
@@ -115,6 +125,8 @@ func (s *Store) Checkpoint(name, appDataPath string) error {
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
 		meta.LastUsed = existing.LastUsed
+		meta.Email = existing.Email
+		meta.Plan = existing.Plan
 	}
 	if err := writeJSONAtomic(filepath.Join(stage, metaFile), meta); err != nil {
 		return err
@@ -199,7 +211,11 @@ func (s *Store) Restore(name, appDataPath string) error {
 		rollback()
 		return err
 	}
-	if err := clearSidecarsAndVolatile(appDataPath); err != nil {
+	if err := StripVolatileCookies(live); err != nil {
+		rollback()
+		return fmt.Errorf("strip volatile cookies: %w", err)
+	}
+	if err := s.restoreVolatile(name, appDataPath); err != nil {
 		rollback()
 		return err
 	}
@@ -280,6 +296,20 @@ func (s *Store) MatchLive(appDataPath string) (string, Health) {
 		}
 	}
 	return "", HealthUsable
+}
+
+func (s *Store) UpdateAccountInfo(name, email, plan string) error {
+	meta, err := s.loadMeta(name)
+	if err != nil {
+		return err
+	}
+	if email != "" {
+		meta.Email = email
+	}
+	if plan != "" {
+		meta.Plan = plan
+	}
+	return s.saveMeta(name, meta)
 }
 
 func (s *Store) Delete(name string) error {
@@ -441,13 +471,61 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func clearSidecarsAndVolatile(appDataPath string) error {
-	for _, name := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
-		if err := os.Remove(filepath.Join(appDataPath, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("clear %s: %w", name, err)
+// restoreVolatile clears the Cookies sidecars, restores the profile's Local
+// Storage snapshot (which holds device-trust / elevated-auth state), and wipes
+// the truly ephemeral stores. Profiles saved before snapshots existed have no
+// Local Storage payload, so live Local Storage is left cleared for them.
+func (s *Store) restoreVolatile(name, appDataPath string) error {
+	for _, sidecar := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
+		if err := os.Remove(filepath.Join(appDataPath, sidecar)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("clear %s: %w", sidecar, err)
 		}
 	}
-	return clearVolatile(appDataPath)
+	liveLevelDB := filepath.Join(appDataPath, localStorageDir, leveldbDir)
+	if err := os.RemoveAll(liveLevelDB); err != nil {
+		return fmt.Errorf("clear %s: %w", leveldbDir, err)
+	}
+	snapshot := filepath.Join(s.profileDir(name), localStorageDir, leveldbDir)
+	if info, err := os.Stat(snapshot); err == nil && info.IsDir() {
+		if err := copyDir(snapshot, liveLevelDB); err != nil {
+			return fmt.Errorf("restore Local Storage: %w", err)
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, dir := range []string{indexedDBDir, sessionStorageDir} {
+		if err := os.RemoveAll(filepath.Join(appDataPath, dir)); err != nil {
+			return fmt.Errorf("clear %s: %w", filepath.Base(dir), err)
+		}
+	}
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, dirPerm); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		from := filepath.Join(src, entry.Name())
+		to := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(from, to); err != nil {
+				return err
+			}
+			continue
+		}
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		if err := copyFile(from, to); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func clearVolatile(appDataPath string) error {

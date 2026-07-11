@@ -20,12 +20,15 @@ func TestCheckpointCreatesMinimalSecureV2Profile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != cookiesFile || entries[1].Name() != metaFile {
-		t.Fatalf("profile artifacts = %v, want only Cookies and meta.json", entryNames(entries))
+	if got := entryNames(entries); len(got) != 3 || got[0] != cookiesFile || got[1] != localStorageDir || got[2] != metaFile {
+		t.Fatalf("profile artifacts = %v, want Cookies, Local Storage and meta.json", got)
 	}
 	assertMode(t, store.profileDir("work"), dirPerm)
 	assertMode(t, filepath.Join(store.profileDir("work"), cookiesFile), filePerm)
 	assertMode(t, filepath.Join(store.profileDir("work"), metaFile), filePerm)
+	snapshot := filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir, "CURRENT")
+	assertMode(t, filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir), dirPerm)
+	assertMode(t, snapshot, filePerm)
 	meta, err := store.loadMeta("work")
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +169,7 @@ func TestStoreRecoversBackupAndRemovesOrphanStage(t *testing.T) {
 	}
 }
 
-func TestRestoreReplacesCookiesClearsVolatileAndPreservesGlobalState(t *testing.T) {
+func TestRestoreReplacesCookiesRestoresLocalStorageAndPreservesGlobalState(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "saved")
 	if err := store.Checkpoint("work", saved); err != nil {
@@ -184,9 +187,13 @@ func TestRestoreReplacesCookiesClearsVolatileAndPreservesGlobalState(t *testing.
 	if err := store.Restore("work", live); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	for _, path := range []string{filepath.Join(live, localStorageDir, leveldbDir), filepath.Join(live, indexedDBDir), filepath.Join(live, sessionStorageDir)} {
+	restored := filepath.Join(live, localStorageDir, leveldbDir, "CURRENT")
+	if got, err := os.ReadFile(restored); err != nil || string(got) != "saved" {
+		t.Fatalf("Local Storage not restored from snapshot: %q %v", got, err)
+	}
+	for _, path := range []string{filepath.Join(live, indexedDBDir), filepath.Join(live, sessionStorageDir)} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("volatile path remains: %s", path)
+			t.Fatalf("ephemeral path remains: %s", path)
 		}
 	}
 	for _, name := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
@@ -199,6 +206,22 @@ func TestRestoreReplacesCookiesClearsVolatileAndPreservesGlobalState(t *testing.
 		if err != nil || string(got) != want {
 			t.Fatalf("global %s changed: %q %v", path, got, err)
 		}
+	}
+}
+
+func TestRestoreWithoutSnapshotLeavesLocalStorageCleared(t *testing.T) {
+	store := newTestStore(t)
+	saved := t.TempDir()
+	createCookiesDBWithMarker(t, filepath.Join(saved, cookiesFile), "saved")
+	if err := store.Checkpoint("work", saved); err != nil {
+		t.Fatal(err)
+	}
+	live := syntheticAppData(t, "live")
+	if err := store.Restore("work", live); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(live, localStorageDir, leveldbDir)); !os.IsNotExist(err) {
+		t.Fatal("live Local Storage should stay cleared when the profile has no snapshot")
 	}
 }
 

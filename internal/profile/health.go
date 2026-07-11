@@ -89,6 +89,37 @@ func inspectCookiesWithTimeout(path string, now time.Time, timeout time.Duration
 	return Inspection{Health: HealthUsable, Reason: "Claude session evidence is locally usable"}
 }
 
+// volatileCookieNames are device/IP-bound Cloudflare cookies that hard-fail
+// when a stale snapshot value is injected. Deleting them lets Cloudflare
+// reissue fresh ones on first load instead of rejecting the request.
+var volatileCookieNames = []string{"cf_clearance", "__cf_bm"}
+
+// StripVolatileCookies deletes the volatile cookies from a Cookies DB and
+// folds the change into the main file via a TRUNCATE checkpoint, so a later
+// removal of the -wal sidecar cannot discard the delete.
+func StripVolatileCookies(path string) error {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(volatileCookieNames)), ",")
+	args := make([]any, len(volatileCookieNames))
+	for i, name := range volatileCookieNames {
+		args[i] = name
+	}
+	if _, err := db.Exec(`DELETE FROM cookies WHERE name IN (`+placeholders+`)`, args...); err != nil {
+		return err
+	}
+	var busy, logFrames, checkpointed int
+	if err := db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return err
+	}
+	return nil
+}
+
 func CheckpointCookies(path string) error {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
