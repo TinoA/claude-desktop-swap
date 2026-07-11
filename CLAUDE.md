@@ -54,13 +54,16 @@ claude-desktop-swap status             # show which profile is active (if tracka
 
 ## Cookie Encryption
 
-Chromium encrypts cookie values using the OS keychain. On the **same machine**, all profiles share the same encryption key — so encrypted blobs can be copied verbatim between profile snapshots without decryption. Never decrypt cookie values; always work with raw encrypted blobs.
+Chromium encrypts cookie values using the OS keychain. On the **same machine**, all profiles share the same encryption key — so encrypted blobs can be copied verbatim between profile snapshots without decryption. The **swap path never decrypts cookie values; always work with raw encrypted blobs.**
+
+**Exception — account info (`internal/account`):** the `list`/picker account-info feature decrypts the `sessionKey` in memory to call the claude.ai API for the account's email and plan. This is the only place decryption is allowed. It is transient (never written to disk), only the resulting email/plan are persisted, and the raw session is never stored.
 
 ## Security Notes
 
 - Never log or print cookie values.
 - Profile directories should be created with `0700` permissions.
-- Never store decrypted session data anywhere.
+- Never store decrypted session data anywhere (email/plan derived from the account API is not session data and may be cached in `meta.json`).
+- The account-info feature is the only component that decrypts a cookie value and the only one that makes a network call; the swap itself stays fully local and offline.
 
 ## Testing
 

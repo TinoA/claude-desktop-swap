@@ -76,5 +76,5 @@ func stopClaudeProcesses(run func(string, ...string) error, sleep func(time.Dura
 	if err := run("pgrep", "-f", claudeProcessPattern); errors.Is(err, errProcessAbsent) {
 		return nil
 	}
-	return fmt.Errorf("Claude Desktop processes remain after forced termination")
+	return fmt.Errorf("processes for Claude Desktop remain after forced termination")
 }

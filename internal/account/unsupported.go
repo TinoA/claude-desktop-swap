@@ -2,5 +2,10 @@
 
 package account
 
-// Fetch is a no-op on non-Darwin platforms.
-func Fetch(_ string) Info { return Info{} }
+import "errors"
+
+// newDecryptor reports that account info is unavailable off macOS, where cookie
+// decryption is not implemented. Fetch/FetchMany then degrade to empty results.
+func newDecryptor() (sessionDecryptor, error) {
+	return nil, errors.New("account info is unsupported on this platform")
+}

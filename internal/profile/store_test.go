@@ -280,6 +280,15 @@ func TestWipePreservesMachineAndGlobalFiles(t *testing.T) {
 	}
 }
 
+func TestProfileCookiesPathResolvesUnderProfile(t *testing.T) {
+	store := newTestStore(t)
+	got := store.ProfileCookiesPath("work")
+	want := filepath.Join(store.profileDir("work"), cookiesFile)
+	if got != want {
+		t.Fatalf("ProfileCookiesPath = %q, want %q", got, want)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := newStore(t.TempDir())

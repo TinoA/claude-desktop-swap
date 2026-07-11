@@ -50,6 +50,7 @@ func profileNameFromArgs(args []string, store *profile.Store) (string, error) {
 	if appData, err := platform.Current().AppDataPath(); err == nil {
 		current, _ = store.MatchLive(appData)
 	}
+	enrichLiveAccounts(store, profiles)
 	return runPicker(profiles, current)
 }
 

@@ -394,6 +394,10 @@ func (s *Store) recoverProfiles() error {
 	return nil
 }
 
+func (s *Store) ProfileCookiesPath(name string) string {
+	return filepath.Join(s.profileDir(name), cookiesFile)
+}
+
 func (s *Store) profileDir(name string) string { return filepath.Join(s.profilesPath(), name) }
 func (s *Store) profilesPath() string          { return filepath.Join(s.baseDir, profilesDirName) }
 
