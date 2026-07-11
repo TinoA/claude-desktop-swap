@@ -11,17 +11,46 @@ import (
 )
 
 var cmdUse = &cobra.Command{
-	Use:   "use <name>",
+	Use:   "use [name]",
 	Short: "Switch to a saved profile (kills and restarts Claude Desktop)",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		store, err := profile.NewStore()
 		if err != nil {
 			return err
 		}
 
-		return switchProfile(args[0], store)
+		name, err := profileNameFromArgs(args, store)
+		if err != nil {
+			return err
+		}
+		if name == "" {
+			return nil
+		}
+
+		return switchProfile(name, store)
 	},
+}
+
+func profileNameFromArgs(args []string, store *profile.Store) (string, error) {
+	if len(args) == 1 {
+		return args[0], nil
+	}
+
+	profiles, err := store.List()
+	if err != nil {
+		return "", err
+	}
+	if len(profiles) == 0 {
+		fmt.Println("No profiles saved. Run 'claude-desktop-swap save <name>' to create one.")
+		return "", nil
+	}
+
+	current := ""
+	if appData, err := platform.Current().AppDataPath(); err == nil {
+		current, _ = store.MatchLive(appData)
+	}
+	return runPicker(profiles, current)
 }
 
 func switchProfile(name string, store *profile.Store) error {

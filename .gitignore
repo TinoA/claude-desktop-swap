@@ -3,3 +3,4 @@ claude-desktop-swap.exe
 dist/
 *.test
 coverage.out
+.atl/
