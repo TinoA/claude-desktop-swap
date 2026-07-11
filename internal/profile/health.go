@@ -131,7 +131,7 @@ func CheckpointCookies(path string) error {
 		return err
 	}
 	if busy != 0 {
-		return fmt.Errorf("Cookies WAL remains busy")
+		return fmt.Errorf("cookies WAL remains busy")
 	}
 	return nil
 }

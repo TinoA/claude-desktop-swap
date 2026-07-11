@@ -149,7 +149,7 @@ func (m pickerModel) View() string {
 			badge = "  " + pickerBadgeStyle.Render("[ACTIVE]")
 		}
 
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			"  %s %02d %s  %s  %s  %s%s\n",
 			cursor,
 			i+1,
@@ -158,7 +158,7 @@ func (m pickerModel) View() string {
 			padRight(healthLabel(p.ObservedHealth), healthWidth),
 			padRight(relativeLastUsed(p.LastUsed), lastWidth),
 			badge,
-		))
+		)
 	}
 
 	b.WriteString("\n  ")

@@ -1,4 +1,14 @@
 version: "2"
+linters:
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # internal/account is a work-in-progress feature (live account email/plan
+      # from the claude.ai API) not yet wired into any command.
+      - path: internal/account/
+        linters:
+          - unused
 formatters:
   enable:
     - gofmt
