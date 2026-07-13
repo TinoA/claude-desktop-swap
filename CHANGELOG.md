@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 (2026-07-13)
+
+
+### Features
+
+* add interactive profile picker and account info display ([3813d97](https://github.com/TinoA/claude-desktop-swap/commit/3813d974f079f4a3a342b01b037b3879260915b9))
+* add Windows Claude Swap tray and release automation ([1331cd8](https://github.com/TinoA/claude-desktop-swap/commit/1331cd83e73435b7cfb3fc59384574017dcdff80))
+* **cli:** initial implementation of claude-swap ([bff1ae5](https://github.com/TinoA/claude-desktop-swap/commit/bff1ae57739f0f881e23fbc9f0a3498ae62a743f))
+* make save automatic by stopping and relaunching Claude Desktop ([09ef9aa](https://github.com/TinoA/claude-desktop-swap/commit/09ef9aab99b2aa2486abe2f74eab3352fe7e2a0b))
+* rename to claude-desktop-swap, add interactive 'add' command, auto-prime on save ([8d68249](https://github.com/TinoA/claude-desktop-swap/commit/8d68249940134bf7e975ec6e1d70e23f4e921d54))
+* show live account email and plan in list and picker ([c928767](https://github.com/TinoA/claude-desktop-swap/commit/c92876701bf0defbcd0d1c2ccff11eed5c275efd))
+
+
+### Bug Fixes
+
+* **cd:** remove unsupported changelog path field ([c2cb3db](https://github.com/TinoA/claude-desktop-swap/commit/c2cb3db971363f75f54be1b781456038722277b8))
+* checkpointed profile switching and cookie-only v2 profiles ([#3](https://github.com/TinoA/claude-desktop-swap/issues/3)) ([abda7b1](https://github.com/TinoA/claude-desktop-swap/commit/abda7b1e73e17877753890e24d46ce460bebca32))
+* decrypt real sessionKey and read correct account API fields ([c52aaa7](https://github.com/TinoA/claude-desktop-swap/commit/c52aaa7cc152e5ab92be9d4ca253c54eec5d1cf4))
+* preserve device trust across account swaps ([5cdd6c4](https://github.com/TinoA/claude-desktop-swap/commit/5cdd6c4cbe16e0537e3ac679c3c1f18985e9cd23))
+* **profile:** clear Cookies-journal on restore ([3a29f63](https://github.com/TinoA/claude-desktop-swap/commit/3a29f6395895dd9a12ea0084443dd6f5754820d4)), closes [#1](https://github.com/TinoA/claude-desktop-swap/issues/1)
+* **profile:** wipe IndexedDB and Session Storage on restore ([1238355](https://github.com/TinoA/claude-desktop-swap/commit/1238355292e8b95f7c3b9af206d88195b6b3fd10))
+
 ## [Unreleased]
 
 ### Fixed
