@@ -5,8 +5,11 @@ go 1.25.0
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/getlantern/systray v1.2.2
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/crypto v0.51.0
+	golang.org/x/sys v0.44.0
+	golang.org/x/term v0.43.0
 	modernc.org/sqlite v1.38.2
 )
 
@@ -24,7 +27,6 @@ require (
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
-	github.com/getlantern/systray v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -42,8 +44,6 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/libc v1.66.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

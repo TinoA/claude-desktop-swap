@@ -235,6 +235,7 @@ func (w *addWorkflow) failBeforeMutation(err error) error {
 	return err
 }
 
+//nolint:unused // used by the Windows tray build.
 func newPendingAddWorkflow(store addStore, p platform.Platform) (*addWorkflow, error) {
 	pending, err := loadPendingAdd()
 	if err != nil {

@@ -8,11 +8,11 @@ import (
 )
 
 func protectForCurrentWindowsUser([]byte) ([]byte, error) {
-	return nil, errors.New("Windows user-protected backups are only available on Windows")
+	return nil, errors.New("windows user-protected backups are only available on Windows")
 }
 
 func unprotectForCurrentWindowsUser([]byte) ([]byte, error) {
-	return nil, errors.New("Windows user-protected backups are only available on Windows")
+	return nil, errors.New("windows user-protected backups are only available on Windows")
 }
 
 func replaceBackupFile(source, destination string) error {

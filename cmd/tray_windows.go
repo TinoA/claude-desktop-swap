@@ -29,8 +29,8 @@ const createNewConsole = 0x00000010
 const loginWindowTimeout = 30 * time.Second
 
 var (
-	errDeleteSessionUnknown      = errors.New("Claude session cannot be verified")
-	errDeleteSessionUnrecognized = errors.New("Claude session does not match a saved account")
+	errDeleteSessionUnknown      = errors.New("claude session cannot be verified")
+	errDeleteSessionUnrecognized = errors.New("claude session does not match a saved account")
 )
 
 var cmdTray = &cobra.Command{
@@ -160,7 +160,7 @@ func (s *trayState) handleAdd() {
 			cancel()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
-					err = errors.New("Claude no mostró la ventana de inicio de sesión a tiempo")
+					err = errors.New("claude no mostró la ventana de inicio de sesión a tiempo")
 				}
 				if recoverErr := workflow.Cancel(); recoverErr != nil && !errors.Is(recoverErr, errAddHandled) {
 					err = fmt.Errorf("%w; recover previous account: %v", err, recoverErr)
@@ -577,7 +577,7 @@ func (s *trayState) prepareCurrentForNewAccount() error {
 	live := platform.CookiesPath(appData)
 	running, _ := platform.Current().IsRunning()
 	if !profile.HasActiveSessionAt(live) && !running {
-		return errors.New("Claude no tiene una sesión activa para proteger")
+		return errors.New("claude no tiene una sesión activa para proteger")
 	}
 	matched, _ := s.store.MatchLiveAt(live)
 	if matched != "" {
@@ -796,7 +796,7 @@ func (s *trayState) deleteAccountIsActive(name string) (bool, bool, error) {
 		return current == name, false, nil
 	}
 	if _, err := p.IsRunning(); err != nil {
-		return false, false, fmt.Errorf("Claude no puede verificarse: %w", err)
+		return false, false, fmt.Errorf("claude no puede verificarse: %w", err)
 	}
 	liveName, liveHealth := s.store.MatchLiveAt(platform.CookiesPath(appData))
 	if liveHealth == profile.HealthUnknown {

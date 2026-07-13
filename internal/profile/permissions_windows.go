@@ -11,7 +11,7 @@ import (
 func securePath(path string) error {
 	user := os.Getenv("USERDOMAIN") + "\\" + os.Getenv("USERNAME")
 	if user == "\\" {
-		return fmt.Errorf("Windows account identity is unavailable for ACL protection")
+		return fmt.Errorf("windows account identity is unavailable for ACL protection")
 	}
 	// Keep the current environment's required inherited access entry, then
 	// remove the broad principals that could otherwise read profile snapshots.

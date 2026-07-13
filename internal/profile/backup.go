@@ -399,9 +399,10 @@ func (s *Store) installBackupArchive(archive []byte) error {
 			return errors.New("backup contents exceed the total size limit")
 		}
 		totalSize += entry.UncompressedSize64
-		if name == "manifest.json" {
+		switch name {
+		case "manifest.json":
 			seenManifest = true
-		} else if name == currentFileName {
+		case currentFileName:
 			seenCurrent = true
 		}
 		target := filepath.Join(stage, filepath.FromSlash(name))

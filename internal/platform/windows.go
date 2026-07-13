@@ -71,7 +71,7 @@ func current() Platform {
 
 func (w *windowsPlatform) AppDataPath() (string, error) {
 	if w.root == "" {
-		return "", fmt.Errorf("Claude Desktop data directory was not detected")
+		return "", fmt.Errorf("claude desktop data directory was not detected")
 	}
 	return w.root, nil
 }
@@ -111,7 +111,7 @@ func (w *windowsPlatform) KillApp() error {
 		}
 		time.Sleep(processPollInterval)
 	}
-	return errors.New("Claude Desktop processes did not exit before timeout")
+	return errors.New("claude desktop processes did not exit before timeout")
 }
 
 func (w *windowsPlatform) LaunchApp() error {
@@ -121,7 +121,7 @@ func (w *windowsPlatform) LaunchApp() error {
 		target, _ := windows.UTF16PtrFromString("shell:AppsFolder\\" + windowsAUMID)
 		err = windows.ShellExecute(0, verb, target, nil, nil, windows.SW_SHOWNORMAL)
 	} else if w.executable == "" {
-		err = errors.New("Claude Desktop executable was not detected")
+		err = errors.New("claude desktop executable was not detected")
 	} else {
 		err = exec.Command(w.executable).Start()
 	}
@@ -144,7 +144,7 @@ func (w *windowsPlatform) LaunchApp() error {
 		}
 		time.Sleep(processPollInterval)
 	}
-	return errors.New("Claude Desktop did not start before timeout")
+	return errors.New("claude desktop did not start before timeout")
 }
 
 func (w *windowsPlatform) WaitForLoginWindow(ctx context.Context) error {
@@ -370,7 +370,7 @@ func desktopProcessPIDs(output, executable string, allowUnknownPath bool) []int 
 			continue
 		}
 		path := normalizeWindowsPath(parts[1])
-		if path != want && !(allowUnknownPath && path == "") {
+		if path != want && (!allowUnknownPath || path != "") {
 			continue
 		}
 		pid, err := strconv.Atoi(strings.TrimSpace(parts[0]))
@@ -394,7 +394,7 @@ func desktopProcessRootPIDs(output, executable string, allowUnknownPath bool) []
 			continue
 		}
 		path := normalizeWindowsPath(parts[2])
-		if path != want && !(allowUnknownPath && path == "") {
+		if path != want && (!allowUnknownPath || path != "") {
 			continue
 		}
 		pid, pidErr := strconv.Atoi(strings.TrimSpace(parts[0]))

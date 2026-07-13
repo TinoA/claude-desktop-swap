@@ -10,7 +10,7 @@ import (
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var exportPassword string
@@ -124,9 +124,9 @@ func prepareBackupProfiles(store backupPreparationStore, p platform.Platform, re
 			fmt.Fprintln(out, "Starting Claude Desktop...")
 			if launchErr := p.LaunchApp(); launchErr != nil {
 				if resultErr == nil {
-					resultErr = fmt.Errorf("Claude could not restart; launch manually: %w", launchErr)
+					resultErr = fmt.Errorf("claude could not restart; launch manually: %w", launchErr)
 				} else {
-					resultErr = fmt.Errorf("%w; Claude could not restart: %v", resultErr, launchErr)
+					resultErr = fmt.Errorf("%w; claude could not restart: %v", resultErr, launchErr)
 				}
 			}
 		}()
@@ -185,11 +185,11 @@ func backupPassword(value, prompt string) (string, error) {
 	if strings.TrimSpace(value) != "" {
 		return value, nil
 	}
-	if !terminal.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("backup password is required; use --password when stdin is not interactive")
 	}
 	fmt.Fprint(os.Stderr, prompt)
-	data, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+	data, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
