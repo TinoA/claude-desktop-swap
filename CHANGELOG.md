@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2](https://github.com/TinoA/claude-desktop-swap/compare/v1.0.1...v1.0.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* check fork releases for updates ([c35362f](https://github.com/TinoA/claude-desktop-swap/commit/c35362fbe16d55264de4a7c698572487b04bb9ff))
+
 ## [1.0.1](https://github.com/TinoA/claude-desktop-swap/compare/v1.0.0...v1.0.1) (2026-07-13)
 
 
