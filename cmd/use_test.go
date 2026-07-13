@@ -13,11 +13,11 @@ import (
 func TestSwitchProfileOrdersStopCheckpointRestoreAndLaunch(t *testing.T) {
 	events := []string{}
 	store := &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable}
-	p := &fakePlatform{events: &events, appData: t.TempDir()}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
 	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"app-data", "inspect:incoming", "stop", "current", "checkpoint:outgoing", "restore:incoming", "launch"}
+	want := []string{"app-data", "inspect:incoming", "current", "stop", "checkpoint:outgoing", "restore:incoming", "launch"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
 	}
@@ -33,17 +33,17 @@ func TestSwitchProfileStopsAfterCheckpointOrRestoreFailure(t *testing.T) {
 		forbidden                 string
 	}{
 		{"checkpoint failure", errors.New("checkpoint failed"), nil, "restore:incoming"},
-		{"restore interruption", nil, errors.New("restore failed"), "launch"},
+		{"restore interruption", nil, errors.New("restore failed"), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			events := []string{}
 			store := &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable, checkpointErr: tt.checkpointErr, restoreErr: tt.restoreErr}
-			p := &fakePlatform{events: &events, appData: t.TempDir()}
+			p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
 			if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err == nil {
 				t.Fatal("switch should fail")
 			}
-			if strings.Contains(strings.Join(events, ","), tt.forbidden) {
+			if tt.forbidden != "" && strings.Contains(strings.Join(events, ","), tt.forbidden) {
 				t.Fatalf("forbidden event %q in %v", tt.forbidden, events)
 			}
 			if store.current != "outgoing" {
@@ -72,13 +72,135 @@ func TestSwitchProfileRefusesUnusableTargetBeforeStopping(t *testing.T) {
 func TestSwitchProfileLaunchFailureKeepsCommittedIncomingState(t *testing.T) {
 	events := []string{}
 	store := &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable}
-	p := &fakePlatform{events: &events, appData: t.TempDir(), launchErr: errors.New("launch failed")}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true, launchErr: errors.New("launch failed")}
 	err := switchProfileWith("incoming", store, p, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "launch manually") {
 		t.Fatalf("error = %v", err)
 	}
 	if store.current != "incoming" {
 		t.Fatalf("committed current = %q", store.current)
+	}
+}
+
+func TestSwitchProfileRestoresCurrentProfileWhenLiveCookiesAreMissing(t *testing.T) {
+	events := []string{}
+	store := &fakeSwitchStore{events: &events, exists: true, current: "incoming", health: profile.HealthUsable}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app-data", "inspect:incoming", "current", "stop", "restore:incoming", "launch"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSwitchProfileCheckpointsWhenClaudeIsClosed(t *testing.T) {
+	events := []string{}
+	store := &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable}
+	p := &fakePlatform{events: &events, appData: t.TempDir()}
+	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app-data", "inspect:incoming", "current", "checkpoint:outgoing", "restore:incoming", "launch"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSwitchProfileSkipsRestoreForAlreadyActiveProfile(t *testing.T) {
+	events := []string{}
+	store := &fakeLiveSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "incoming", health: profile.HealthUsable},
+		liveName:        "incoming",
+		liveHealth:      profile.HealthUsable,
+	}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app-data", "inspect:incoming", "current", "match"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSwitchProfileRefusesUnknownLiveSessionAfterStopping(t *testing.T) {
+	events := []string{}
+	store := &fakeLiveSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		liveHealth:      profile.HealthUnknown,
+	}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	err := switchProfileWith("incoming", store, p, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "cannot be verified") {
+		t.Fatalf("error = %v", err)
+	}
+	if containsEvent(events, "checkpoint:outgoing") || containsEvent(events, "restore:incoming") {
+		t.Fatalf("unknown live session was modified: %v", events)
+	}
+	if !containsEvent(events, "launch") {
+		t.Fatalf("previous Claude session was not relaunched: %v", events)
+	}
+}
+
+func TestSwitchProfileDoesNotCheckpointMissingLiveSession(t *testing.T) {
+	events := []string{}
+	store := &fakeLiveSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		liveHealth:      profile.HealthMissing,
+	}
+	p := &fakePlatform{events: &events, appData: t.TempDir()}
+	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if containsEvent(events, "checkpoint:outgoing") {
+		t.Fatalf("missing live session was checkpointed: %v", events)
+	}
+	if !containsEvent(events, "restore:incoming") {
+		t.Fatalf("incoming profile was not restored: %v", events)
+	}
+}
+
+func TestSwitchProfileUpdatesConfirmedUnrecognizedSessionBeforeSwitch(t *testing.T) {
+	events := []string{}
+	store := &fakeLiveSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		liveHealth:      profile.HealthUsable,
+	}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	confirmed := false
+	err := switchProfileWith("incoming", store, p, &bytes.Buffer{}, func(current, target string) bool {
+		confirmed = current == "outgoing" && target == "incoming"
+		return confirmed
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !confirmed {
+		t.Fatal("unrecognized session update was not confirmed")
+	}
+	if !containsEvent(events, "checkpoint:outgoing") || !containsEvent(events, "restore:incoming") {
+		t.Fatalf("confirmed session was not preserved before switch: %v", events)
+	}
+}
+
+func TestSwitchProfilePreservesUnrecognizedSessionWhenConfirmationIsDeclined(t *testing.T) {
+	events := []string{}
+	store := &fakeLiveSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		liveHealth:      profile.HealthUsable,
+	}
+	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
+	err := switchProfileWith("incoming", store, p, &bytes.Buffer{}, func(_, _ string) bool { return false })
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("error = %v", err)
+	}
+	if containsEvent(events, "checkpoint:outgoing") || containsEvent(events, "restore:incoming") {
+		t.Fatalf("declined session was modified: %v", events)
+	}
+	if !containsEvent(events, "launch") {
+		t.Fatalf("previous Claude session was not relaunched: %v", events)
 	}
 }
 
@@ -89,6 +211,17 @@ type fakeSwitchStore struct {
 	health        profile.Health
 	checkpointErr error
 	restoreErr    error
+}
+
+type fakeLiveSwitchStore struct {
+	*fakeSwitchStore
+	liveName   string
+	liveHealth profile.Health
+}
+
+func (s *fakeLiveSwitchStore) MatchLiveAt(string) (string, profile.Health) {
+	*s.events = append(*s.events, "match")
+	return s.liveName, s.liveHealth
 }
 
 func (s *fakeSwitchStore) Exists(string) bool { return s.exists }
@@ -113,17 +246,19 @@ func (s *fakeSwitchStore) Restore(name, path string) error {
 }
 
 type fakePlatform struct {
-	events    *([]string)
-	appData   string
-	running   bool
-	launchErr error
+	events     *([]string)
+	appData    string
+	appDataErr error
+	running    bool
+	launchErr  error
 }
 
 func (p *fakePlatform) AppDataPath() (string, error) {
 	*p.events = append(*p.events, "app-data")
-	return p.appData, nil
+	return p.appData, p.appDataErr
 }
 func (p *fakePlatform) IsRunning() (bool, error) { return p.running, nil }
+func (p *fakePlatform) IsInstalled() bool        { return p.appDataErr == nil }
 func (p *fakePlatform) KillApp() error           { *p.events = append(*p.events, "stop"); return nil }
 func (p *fakePlatform) LaunchApp() error         { *p.events = append(*p.events, "launch"); return p.launchErr }
 

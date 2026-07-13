@@ -14,20 +14,21 @@ import (
 )
 
 const (
-	storeDirName       = ".claude-swap"
-	profilesDirName    = "profiles"
-	currentFileName    = "current"
-	cookiesFile        = "Cookies"
-	cookiesJournalFile = "Cookies-journal"
-	cookiesWALFile     = "Cookies-wal"
-	cookiesSHMFile     = "Cookies-shm"
-	localStorageDir    = "Local Storage"
-	leveldbDir         = "leveldb"
-	indexedDBDir       = "IndexedDB"
-	sessionStorageDir  = "Session Storage"
-	deviceIDFile       = "ant-did"
-	metaFile           = "meta.json"
-	formatVersion      = 2
+	storeDirName        = ".claude-swap"
+	profilesDirName     = "profiles"
+	currentFileName     = "current"
+	cookiesFile         = "Cookies"
+	cookiesJournalFile  = "Cookies-journal"
+	cookiesWALFile      = "Cookies-wal"
+	cookiesSHMFile      = "Cookies-shm"
+	localStorageDir     = "Local Storage"
+	leveldbDir          = "leveldb"
+	indexedDBDir        = "IndexedDB"
+	sessionStorageDir   = "Session Storage"
+	deviceIDFile        = "ant-did"
+	metaFile            = "meta.json"
+	formatVersion       = 3
+	digestFormatVersion = 2
 
 	dirPerm  os.FileMode = 0700
 	filePerm os.FileMode = 0600
@@ -43,6 +44,7 @@ type Meta struct {
 	SavedAt        time.Time `json:"saved_at,omitempty"`
 	ObservedHealth Health    `json:"observed_health,omitempty"`
 	CookieDigest   string    `json:"cookie_digest,omitempty"`
+	SessionDigest  string    `json:"session_digest,omitempty"`
 }
 
 type Store struct {
@@ -69,6 +71,12 @@ func newStore(base string) (*Store, error) {
 	if err := os.Chmod(profiles, dirPerm); err != nil {
 		return nil, err
 	}
+	if err := securePath(base); err != nil {
+		return nil, err
+	}
+	if err := securePath(profiles); err != nil {
+		return nil, err
+	}
 	s := &Store{baseDir: base, now: time.Now}
 	if err := s.recoverProfiles(); err != nil {
 		return nil, err
@@ -86,7 +94,13 @@ func (s *Store) Save(name, appDataPath string) error {
 }
 
 func (s *Store) Checkpoint(name, appDataPath string) error {
-	live := filepath.Join(appDataPath, cookiesFile)
+	return s.CheckpointAt(name, appDataPath, filepath.Join(appDataPath, cookiesFile))
+}
+
+func (s *Store) CheckpointAt(name, appDataPath, live string) error {
+	if !validProfileName(name) {
+		return fmt.Errorf("invalid profile name %q", name)
+	}
 	if inspection := InspectCookies(live, s.now()); inspection.Health != HealthUsable {
 		return fmt.Errorf("refuse checkpoint of %s session: %s", inspection.Health, inspection.Reason)
 	}
@@ -109,24 +123,37 @@ func (s *Store) Checkpoint(name, appDataPath string) error {
 	if err := copyFile(live, stagedCookies); err != nil {
 		return fmt.Errorf("stage cookies: %w", err)
 	}
-	liveLevelDB := filepath.Join(appDataPath, localStorageDir, leveldbDir)
-	if info, err := os.Stat(liveLevelDB); err == nil && info.IsDir() {
-		if err := copyDir(liveLevelDB, filepath.Join(stage, localStorageDir, leveldbDir)); err != nil {
-			return fmt.Errorf("stage Local Storage: %w", err)
+	for _, directory := range []struct {
+		rel   string
+		label string
+	}{
+		{filepath.Join(localStorageDir, leveldbDir), "Local Storage"},
+		{indexedDBDir, "IndexedDB"},
+		{sessionStorageDir, "Session Storage"},
+	} {
+		liveDirectory := filepath.Join(appDataPath, directory.rel)
+		if info, err := os.Stat(liveDirectory); err == nil && info.IsDir() {
+			if err := copyDir(liveDirectory, filepath.Join(stage, directory.rel)); err != nil {
+				return fmt.Errorf("stage %s: %w", directory.label, err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	digest, err := cookieDigest(stagedCookies)
 	if err != nil {
 		return err
 	}
-	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest}
+	sessionDigest, _ := SessionDigest(stagedCookies)
+	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: sessionDigest}
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
 		meta.LastUsed = existing.LastUsed
 		meta.Email = existing.Email
 		meta.Plan = existing.Plan
+		if meta.SessionDigest == "" {
+			meta.SessionDigest = existing.SessionDigest
+		}
 	}
 	if err := writeJSONAtomic(filepath.Join(stage, metaFile), meta); err != nil {
 		return err
@@ -134,7 +161,12 @@ func (s *Store) Checkpoint(name, appDataPath string) error {
 	if inspection := InspectCookies(stagedCookies, s.now()); inspection.Health != HealthUsable {
 		return fmt.Errorf("staged profile is %s: %s", inspection.Health, inspection.Reason)
 	}
-	if err := syncTree(stage); err != nil {
+	if runtime.GOOS != "windows" {
+		if err := syncTree(stage); err != nil {
+			return err
+		}
+	}
+	if err := securePath(stage); err != nil {
 		return err
 	}
 	return s.commitProfile(name, stage)
@@ -153,7 +185,7 @@ func (s *Store) Inspect(name string) Inspection {
 		return inspection
 	}
 	meta, err := s.loadMeta(name)
-	if err == nil && meta.FormatVersion >= formatVersion && meta.CookieDigest != "" {
+	if err == nil && meta.FormatVersion >= digestFormatVersion && meta.CookieDigest != "" {
 		digest, err := cookieDigest(cookies)
 		if err != nil || digest != meta.CookieDigest {
 			return Inspection{Health: HealthUnknown, Reason: "profile integrity digest does not match"}
@@ -163,6 +195,13 @@ func (s *Store) Inspect(name string) Inspection {
 }
 
 func (s *Store) Restore(name, appDataPath string) error {
+	return s.RestoreAt(name, appDataPath, filepath.Join(appDataPath, cookiesFile))
+}
+
+func (s *Store) RestoreAt(name, appDataPath, live string) error {
+	if !validProfileName(name) {
+		return fmt.Errorf("invalid profile name %q", name)
+	}
 	inspection := s.Inspect(name)
 	if inspection.Health != HealthUsable {
 		return fmt.Errorf("profile %q is %s: %s", name, inspection.Health, inspection.Reason)
@@ -171,39 +210,101 @@ func (s *Store) Restore(name, appDataPath string) error {
 		return err
 	}
 
-	stage, err := os.CreateTemp(appDataPath, ".Cookies.stage-")
+	stage, err := os.MkdirTemp(appDataPath, ".claude-restore-stage-")
 	if err != nil {
 		return err
 	}
-	stagePath := stage.Name()
-	stage.Close()
-	defer os.Remove(stagePath)
-	if err := copyFile(filepath.Join(s.profileDir(name), cookiesFile), stagePath); err != nil {
+	defer os.RemoveAll(stage)
+	stageCookies := filepath.Join(stage, cookiesFile)
+	if err := copyFile(filepath.Join(s.profileDir(name), cookiesFile), stageCookies); err != nil {
 		return fmt.Errorf("stage live cookies: %w", err)
 	}
-	if got := InspectCookies(stagePath, s.now()); got.Health != HealthUsable {
+	if got := InspectCookies(stageCookies, s.now()); got.Health != HealthUsable {
 		return fmt.Errorf("staged live cookies are %s: %s", got.Health, got.Reason)
 	}
-
-	live := filepath.Join(appDataPath, cookiesFile)
-	backup := filepath.Join(appDataPath, ".Cookies.rollback")
-	_ = os.Remove(backup)
-	hadLive := false
-	if _, err := os.Stat(live); err == nil {
-		hadLive = true
-		if err := os.Rename(live, backup); err != nil {
-			return fmt.Errorf("retain live cookies: %w", err)
+	stateDirectories := []struct {
+		rel      string
+		label    string
+		rollback string
+	}{
+		{filepath.Join(localStorageDir, leveldbDir), "Local Storage", "leveldb"},
+		{indexedDBDir, "IndexedDB", "indexeddb"},
+		{sessionStorageDir, "Session Storage", "sessionstorage"},
+	}
+	for _, directory := range stateDirectories {
+		snapshotDirectory := filepath.Join(s.profileDir(name), directory.rel)
+		if info, err := os.Stat(snapshotDirectory); err == nil && info.IsDir() {
+			if err := copyDir(snapshotDirectory, filepath.Join(stage, directory.rel)); err != nil {
+				return fmt.Errorf("stage %s: %w", directory.label, err)
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	}
+
+	rollbackRoot, err := os.MkdirTemp(appDataPath, ".claude-restore-rollback-")
+	if err != nil {
 		return err
 	}
+	defer os.RemoveAll(rollbackRoot)
+	backupCookies := filepath.Join(rollbackRoot, "cookies")
+	backupData := filepath.Join(rollbackRoot, "data")
+	if err := os.MkdirAll(backupCookies, dirPerm); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(backupData, dirPerm); err != nil {
+		return err
+	}
+
+	type movedPath struct {
+		live    string
+		backup  string
+		existed bool
+	}
+	var moved []movedPath
+	moveToRollback := func(livePath, backupPath string) error {
+		if _, err := os.Stat(livePath); errors.Is(err, os.ErrNotExist) {
+			moved = append(moved, movedPath{live: livePath, backup: backupPath})
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if err := os.Rename(livePath, backupPath); err != nil {
+			return err
+		}
+		moved = append(moved, movedPath{live: livePath, backup: backupPath, existed: true})
+		return nil
+	}
 	rollback := func() {
-		_ = os.Remove(live)
-		if hadLive {
-			_ = os.Rename(backup, live)
+		for index := len(moved) - 1; index >= 0; index-- {
+			entry := moved[index]
+			_ = os.RemoveAll(entry.live)
+			if !entry.existed {
+				continue
+			}
+			_ = os.MkdirAll(filepath.Dir(entry.live), dirPerm)
+			_ = os.Rename(entry.backup, entry.live)
 		}
 	}
-	if err := os.Rename(stagePath, live); err != nil {
+
+	for _, sidecar := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
+		if err := moveToRollback(filepath.Join(filepath.Dir(live), sidecar), filepath.Join(backupCookies, sidecar)); err != nil {
+			rollback()
+			return fmt.Errorf("retain Cookies sidecar: %w", err)
+		}
+	}
+	if err := moveToRollback(live, filepath.Join(backupCookies, cookiesFile)); err != nil {
+		rollback()
+		return fmt.Errorf("retain live cookies: %w", err)
+	}
+	for _, directory := range stateDirectories {
+		if err := moveToRollback(filepath.Join(appDataPath, directory.rel), filepath.Join(backupData, directory.rollback)); err != nil {
+			rollback()
+			return fmt.Errorf("retain live %s: %w", directory.label, err)
+		}
+	}
+
+	if err := os.Rename(stageCookies, live); err != nil {
 		rollback()
 		return fmt.Errorf("commit live cookies: %w", err)
 	}
@@ -211,15 +312,25 @@ func (s *Store) Restore(name, appDataPath string) error {
 		rollback()
 		return err
 	}
-	if err := StripVolatileCookies(live); err != nil {
-		rollback()
-		return fmt.Errorf("strip volatile cookies: %w", err)
-	}
-	if err := s.restoreVolatile(name, appDataPath); err != nil {
-		rollback()
-		return err
+	for _, directory := range stateDirectories {
+		stageDirectory := filepath.Join(stage, directory.rel)
+		liveDirectory := filepath.Join(appDataPath, directory.rel)
+		if _, err := os.Stat(stageDirectory); err == nil {
+			if err := os.MkdirAll(filepath.Dir(liveDirectory), dirPerm); err != nil {
+				rollback()
+				return err
+			}
+			if err := os.Rename(stageDirectory, liveDirectory); err != nil {
+				rollback()
+				return fmt.Errorf("commit %s: %w", directory.label, err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			rollback()
+			return err
+		}
 	}
 	previousMeta, metaErr := s.loadMeta(name)
+	previousCurrent, currentErr := s.Current()
 	if err := s.setLastUsed(name); err != nil {
 		rollback()
 		return err
@@ -228,16 +339,24 @@ func (s *Store) Restore(name, appDataPath string) error {
 		if metaErr == nil {
 			_ = s.saveMeta(name, previousMeta)
 		}
+		if currentErr == nil {
+			_ = s.SetCurrent(previousCurrent)
+		} else {
+			_ = os.RemoveAll(filepath.Join(s.baseDir, currentFileName))
+		}
 		rollback()
 		return err
 	}
-	_ = os.Remove(backup)
 	return nil
 }
 
 func (s *Store) Wipe(appDataPath string) error {
+	return s.WipeAt(appDataPath, filepath.Join(appDataPath, cookiesFile))
+}
+
+func (s *Store) WipeAt(appDataPath, live string) error {
 	for _, name := range []string{cookiesFile, cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
-		if err := os.Remove(filepath.Join(appDataPath, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(filepath.Dir(live), name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("wipe %s: %w", name, err)
 		}
 	}
@@ -246,6 +365,10 @@ func (s *Store) Wipe(appDataPath string) error {
 
 func HasActiveSession(appDataPath string) bool {
 	return InspectCookies(filepath.Join(appDataPath, cookiesFile), time.Now()).Health == HealthUsable
+}
+
+func HasActiveSessionAt(cookiesPath string) bool {
+	return InspectCookies(cookiesPath, time.Now()).Health == HealthUsable
 }
 
 func (s *Store) List() ([]Meta, error) {
@@ -272,8 +395,25 @@ func (s *Store) List() ([]Meta, error) {
 	return profiles, nil
 }
 
+func (s *Store) IncompleteProfiles() ([]string, error) {
+	profiles, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var incomplete []string
+	for _, meta := range profiles {
+		if meta.FormatVersion < formatVersion {
+			incomplete = append(incomplete, meta.Name)
+		}
+	}
+	return incomplete, nil
+}
+
 func (s *Store) MatchLive(appDataPath string) (string, Health) {
-	live := filepath.Join(appDataPath, cookiesFile)
+	return s.MatchLiveAt(filepath.Join(appDataPath, cookiesFile))
+}
+
+func (s *Store) MatchLiveAt(live string) (string, Health) {
 	inspection := InspectCookies(live, s.now())
 	if inspection.Health != HealthUsable {
 		return "", inspection.Health
@@ -282,11 +422,19 @@ func (s *Store) MatchLive(appDataPath string) (string, Health) {
 	if err != nil {
 		return "", HealthUnknown
 	}
+	liveSessionDigest, _ := SessionDigest(live)
 	profiles, err := s.List()
 	if err != nil {
 		return "", HealthUnknown
 	}
 	for _, meta := range profiles {
+		profileSessionDigest := meta.SessionDigest
+		if profileSessionDigest == "" {
+			profileSessionDigest, _ = SessionDigest(filepath.Join(s.profileDir(meta.Name), cookiesFile))
+		}
+		if liveSessionDigest != "" && profileSessionDigest != "" && profileSessionDigest == liveSessionDigest && s.Inspect(meta.Name).Health == HealthUsable {
+			return meta.Name, HealthUsable
+		}
 		profileDigest := meta.CookieDigest
 		if profileDigest == "" {
 			profileDigest, _ = cookieDigest(filepath.Join(s.profileDir(meta.Name), cookiesFile))
@@ -313,6 +461,9 @@ func (s *Store) UpdateAccountInfo(name, email, plan string) error {
 }
 
 func (s *Store) Delete(name string) error {
+	if !validProfileName(name) {
+		return fmt.Errorf("invalid profile name %q", name)
+	}
 	if !s.Exists(name) {
 		return fmt.Errorf("profile %q not found", name)
 	}
@@ -473,36 +624,6 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
-}
-
-// restoreVolatile clears the Cookies sidecars, restores the profile's Local
-// Storage snapshot (which holds device-trust / elevated-auth state), and wipes
-// the truly ephemeral stores. Profiles saved before snapshots existed have no
-// Local Storage payload, so live Local Storage is left cleared for them.
-func (s *Store) restoreVolatile(name, appDataPath string) error {
-	for _, sidecar := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
-		if err := os.Remove(filepath.Join(appDataPath, sidecar)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("clear %s: %w", sidecar, err)
-		}
-	}
-	liveLevelDB := filepath.Join(appDataPath, localStorageDir, leveldbDir)
-	if err := os.RemoveAll(liveLevelDB); err != nil {
-		return fmt.Errorf("clear %s: %w", leveldbDir, err)
-	}
-	snapshot := filepath.Join(s.profileDir(name), localStorageDir, leveldbDir)
-	if info, err := os.Stat(snapshot); err == nil && info.IsDir() {
-		if err := copyDir(snapshot, liveLevelDB); err != nil {
-			return fmt.Errorf("restore Local Storage: %w", err)
-		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	for _, dir := range []string{indexedDBDir, sessionStorageDir} {
-		if err := os.RemoveAll(filepath.Join(appDataPath, dir)); err != nil {
-			return fmt.Errorf("clear %s: %w", filepath.Base(dir), err)
-		}
-	}
-	return nil
 }
 
 func copyDir(src, dst string) error {

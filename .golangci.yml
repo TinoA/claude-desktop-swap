@@ -3,6 +3,10 @@ linters:
   exclusions:
     presets:
       - std-error-handling
+    rules:
+      - path: (cmd/(delete_overlay_windows|native_ui_windows|switch_overlay_windows)\.go|internal/platform/windows\.go|internal/profile/backup_windows\.go)
+        linters:
+          - errcheck
 formatters:
   enable:
     - gofmt

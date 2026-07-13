@@ -1,112 +1,174 @@
-# claude-desktop-swap
+# Windows Claude Swap
 
-Switch between multiple Claude Desktop accounts without logging out of any of them.
+Switch between multiple Claude Desktop accounts from the Windows system tray
+without manually logging out.
 
-## How it works
+This repository is a fork of
+[`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
+The upstream project and its MIT license remain credited. Windows-specific
+tray support, account backup/restore, native overlays, installation, and
+release automation are maintained in this fork.
 
-Claude Desktop is an Electron app whose root `Cookies` SQLite database is the authoritative local session evidence. `claude-desktop-swap` stores that database as a named profile and swaps it only after Claude and its helper processes have fully stopped.
+## What it does
 
-Before restoring the incoming profile, a switch checkpoints the currently tracked outgoing profile. This preserves cookie refreshes made since the previous switch. Local Storage, IndexedDB, and Session Storage are volatile account caches: they are cleared after replacement so Claude can rebuild them from the restored cookies.
+- Saves multiple Claude Desktop sessions as named profiles.
+- Switches accounts by safely stopping and restarting Claude Desktop.
+- Adds a new account through a guided login flow.
+- Runs as a native Windows system-tray application.
+- Detects normal, MSIX, Squirrel, and portable Claude Desktop installations.
+- Exports and imports encrypted backups.
+- Preserves account cookies, Local Storage, IndexedDB, and Session Storage.
+- Preserves global device state such as `ant-did`.
+- Detects available updates from GitHub Releases.
 
-## Installation
+Claude Code is not targeted or terminated. The tool only operates on the
+detected Claude Desktop installation.
 
-Download the latest binary for your platform from the [releases page](../../releases/latest).
+## Install for normal users
 
-**macOS (Apple Silicon)**
-```sh
-curl -L https://github.com/FranCalveyra/claude-desktop-swap/releases/latest/download/claude-desktop-swap_darwin_arm64.tar.gz | tar xz
-sudo mv claude-desktop-swap /usr/local/bin/
-```
+Download the latest installer from the
+[Releases page](https://github.com/TinoA/claude-desktop-swap/releases/latest):
 
-**macOS (Intel)**
-```sh
-curl -L https://github.com/FranCalveyra/claude-desktop-swap/releases/latest/download/claude-desktop-swap_darwin_amd64.tar.gz | tar xz
-sudo mv claude-desktop-swap /usr/local/bin/
-```
+- `Windows-Claude-Swap-Setup-amd64.exe` for standard 64-bit Windows.
+- `Windows-Claude-Swap-Setup-arm64.exe` for Windows on ARM.
 
-### Build from source
+The installer:
 
-```sh
-go install github.com/FranCalveyra/claude-desktop-swap@latest
-```
+1. Installs per user, without administrator privileges.
+2. Creates a Start Menu shortcut.
+3. Offers optional startup with Windows.
+4. Starts the tray automatically after installation.
+5. Includes a normal Windows uninstaller.
 
-## Usage
+Uninstalling removes the program but preserves saved profiles and backups in
+`%USERPROFILE%\.claude-swap`. Delete those files separately only if you want
+to remove the saved sessions and encrypted tokens.
 
-```sh
-# Save your current session as a named profile (quit Claude first)
-claude-desktop-swap save personal
+## Use the tray
 
-# Add another account interactively — no manual logout required
-claude-desktop-swap add work
+After installation, open the Claude icon in the notification area:
 
-# Switch to a saved profile (kills and restarts Claude Desktop)
-claude-desktop-swap use work
+- **Cuentas**: choose a saved profile and switch to it.
+- **Agregar cuenta...**: opens Claude Desktop for a new login and saves the
+  account automatically after login.
+- **Eliminar cuenta...**: removes only the selected local profile.
+- **Backup**: creates a password-encrypted or same-machine Windows-protected
+  backup.
+- **Importar backup**: detects the backup protection automatically.
+- **Nueva versión disponible**: opens the latest GitHub release.
 
-# List all saved profiles (* = active)
+Before exporting a backup, the application safely stops Claude Desktop,
+refreshes the active profile completely, and starts Claude again. A backup is
+refused if an older profile still needs a complete refresh, so it cannot give
+a false impression that every account is recoverable without verification.
+
+## CLI
+
+```text
+claude-desktop-swap tray
+claude-desktop-swap add <name>
+claude-desktop-swap save <name>
+claude-desktop-swap use [name]
 claude-desktop-swap list
-
-# Show the currently active profile
+claude-desktop-swap delete <name>
 claude-desktop-swap status
-
-# Delete a profile
-claude-desktop-swap delete old-account
+claude-desktop-swap export <file>
+claude-desktop-swap export --local <file>
+claude-desktop-swap import <file>
 ```
 
-## First-time setup
+The `--local` backup is protected for the current Windows user and machine.
+It is the best option for reinstalling Windows Claude Swap on the same
+computer. Password-protected backups can be moved as archives, but Chromium
+session cookies remain encrypted by the original Windows key and may require
+login on a different computer.
 
-1. Make sure you're logged into Claude Desktop as your first account. Quit Claude Desktop, then snapshot it:
-   ```sh
-   claude-desktop-swap save personal
-   ```
-2. Add a second account — `add` snapshots `personal`, clears the slate, opens Claude for you to log in, and saves the new session:
-   ```sh
-   claude-desktop-swap add work
-   ```
-3. Repeat `add <name>` for any additional accounts.
+## Session preservation
 
-From here on, switching is one command:
+Each profile stores a snapshot of:
 
-```sh
-claude-desktop-swap use personal
-claude-desktop-swap use work
+- Claude `Cookies` SQLite database, including encrypted session cookies.
+- `Local Storage/leveldb`.
+- `IndexedDB`.
+- `Session Storage`.
+- Profile metadata and integrity information.
+
+Switching is transactional. Claude is stopped before files are changed, the
+incoming state is staged, and every replaced path can be rolled back if an
+operation fails. Cookies such as `cf_clearance` and `__cf_bm` are not deleted
+automatically.
+
+Older profiles can still be imported, but they need one successful switch or
+refresh before they can be included in a complete new backup. Anthropic can
+still request verification when it expires or revokes a session, detects a
+security event, or changes its server-side requirements; no local tool can
+guarantee otherwise.
+
+Chats are not copied by Windows Claude Swap. Claude synchronizes chats through
+the account's own service, so each account continues to see its server-side
+history after switching.
+
+## Profile location and security
+
+Profiles are stored in:
+
+```text
+%USERPROFILE%\.claude-swap\profiles\<name>\
 ```
 
-> **Important:** Never manually log out of Claude Desktop to set up a new account — Anthropic invalidates the session server-side and the snapshot becomes useless. Always use `add` or `save` to capture a session **before** any logout.
+Cookie values are never decrypted, printed, or logged. Profile files are
+treated as secrets and protected with restrictive permissions where the
+operating system supports them. Do not upload `.claude-swap` or backup files
+to GitHub.
 
-`save`, including `save --force`, refuses to snapshot while Claude is running. A quiescent database is required for a safe WAL checkpoint.
+## Build from source
 
-## Profile storage
+Requirements:
 
-Profiles are stored at `~/.claude-swap/profiles/<name>/` and contain:
+- Go version declared in `go.mod`.
+- Windows SDK support for Windows builds.
 
-| File | Contents |
-|------|----------|
-| `Cookies` | SQLite copy of your session cookies |
-| `meta.json` | Non-secret format, identity, local health, timestamp, and integrity metadata |
+```powershell
+go test ./...
+go vet ./...
+go build -trimpath -o claude-desktop-swap.exe .
+.\claude-desktop-swap.exe tray
+```
 
-Version 2 profiles contain only these two files. Directories use `0700`; files use `0600`. Cookie values are never selected, decrypted, printed, or logged.
+The development executable is separate from the installed release. Building
+does not delete profiles, uninstall Claude Desktop, or modify saved accounts.
 
-Version 1 profiles remain readable without eager migration. A locally usable v1 profile restores normally and becomes v2 only after its next successful outgoing checkpoint. Expired or incomplete v1 profiles cannot be repaired from legacy Local Storage or IndexedDB data; sign in again and save a fresh profile.
+## Release automation
 
-Health is based on non-secret local SQLite evidence and is reported as `usable`, `expired`, `missing`, or `unknown`. Expired, missing, unknown, unsafe, or integrity-mismatched profiles are never restored. Server-side expiry cannot be extended by this tool.
+The `main` branch uses Conventional Commits and GitHub Actions:
 
-The active profile is tracked at `~/.claude-swap/current`, but `status` reports a profile name only when live Cookies actually match a usable saved profile.
+1. CI runs tests, race tests, and lint on supported operating systems.
+2. Release Please opens a version/changelog pull request when changes require
+   a release.
+3. Merging that release pull request creates the version tag and release.
+4. GoReleaser publishes CLI archives and checksums.
+5. The Windows job publishes x64 and ARM64 native installers.
 
-## Switch safety and preserved data
+No local token, cookie, profile, or backup is included in a release. The
+installer is designed to preserve user data during upgrades and uninstall.
 
-A switch follows: target preflight → verified full stop → outgoing WAL checkpoint and atomic profile commit → staged incoming replacement → volatile-cache clearing → active tracking → launch. Interrupted profile writes retain the previous generation for recovery. A failed incoming replacement rolls back live Cookies and does not report success. If launch fails after commit, the incoming profile remains active and Claude can be opened manually.
+## Fork and upstream
 
-Only `Cookies`, `Cookies-journal`, `Cookies-wal`, `Cookies-shm`, `Local Storage/leveldb`, `IndexedDB`, and `Session Storage` participate in session replacement or cache clearing. Global and machine state—including `config.json`, `WebStorage`, `partitions`, and `ant-did`—is preserved.
+The GitHub fork relationship is visible automatically on the repository page.
+To create the same relationship manually:
 
-## Platform support
+```bash
+gh repo fork FranCalveyra/claude-desktop-swap
+git remote add upstream https://github.com/FranCalveyra/claude-desktop-swap.git
+git remote add origin https://github.com/<your-user>/claude-desktop-swap.git
+```
 
-| OS | Status |
-|----|--------|
-| macOS | Supported |
-| Windows | Planned |
+Use `upstream` for updates from the original project and `origin` for this
+fork. This repository is currently published as
+`TinoA/claude-desktop-swap`.
 
-## Security
+## License and attribution
 
-Cookie values are encrypted by Chromium using your OS keychain. `claude-desktop-swap` never decrypts them — it copies raw encrypted blobs, which are only usable on the machine where they were created.
-
-Profile directories are created with `0700` permissions and profile files with `0600`. Restoration refuses broader permissions.
+MIT License. See [LICENSE](LICENSE). This project is based on and credits the
+upstream [`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap)
+project.

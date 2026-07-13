@@ -2,26 +2,48 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  release:
-    name: Release
+  version:
+    name: Version and release
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          release-type: go
+          package-name: github.com/FranCalveyra/claude-desktop-swap
+          target-branch: main
+
+  archives:
+    name: Publish CLI archives
+    needs: version
+    if: needs.version.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.version.outputs.tag_name }}
           fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
-      - name: Run tests
+      - name: Test release commit
         run: go test ./...
 
       - uses: goreleaser/goreleaser-action@v6
@@ -30,3 +52,51 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  installers:
+    name: Publish Windows installer (${{ matrix.arch }})
+    needs: version
+    if: needs.version.outputs.release_created == 'true'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build Windows binary
+        shell: pwsh
+        env:
+          GOARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.version.outputs.tag_name }}
+        run: |
+          New-Item -ItemType Directory -Force "installer/dist/windows_$env:GOARCH" | Out-Null
+          $version = $env:VERSION.TrimStart('v')
+          go build -trimpath -ldflags "-s -w -X github.com/FranCalveyra/claude-desktop-swap/cmd.Version=$version" -o "installer/dist/windows_$env:GOARCH/claude-desktop-swap.exe" .
+
+      - uses: ilammy/setup-innosetup@v2
+
+      - name: Build installer
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.version.outputs.tag_name }}
+        run: |
+          $version = $env:VERSION.TrimStart('v')
+          iscc "/DAppArch=$env:ARCH" "/DAppVersion=$version" installer/windows-claude-swap.iss
+
+      - name: Upload installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          gh release upload $env:TAG "installer/dist/installer/Windows-Claude-Swap-Setup-$env:ARCH.exe" --clobber --repo "${{ github.repository }}"

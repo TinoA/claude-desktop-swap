@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -33,6 +34,13 @@ func (d *darwinPlatform) AppDataPath() (string, error) {
 	}
 	return filepath.Join(home, "Library", appDataDir, appName), nil
 }
+
+func (d *darwinPlatform) IsInstalled() bool {
+	_, err := os.Stat("/Applications/Claude.app")
+	return err == nil
+}
+
+func (d *darwinPlatform) WaitForLoginWindow(ctx context.Context) error { return nil }
 
 func (d *darwinPlatform) IsRunning() (bool, error) {
 	err := runProcessCommand("pgrep", "-f", claudeProcessPattern)

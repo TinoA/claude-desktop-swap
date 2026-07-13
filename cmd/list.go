@@ -32,7 +32,7 @@ var cmdList = &cobra.Command{
 
 		current := ""
 		if appData, err := platform.Current().AppDataPath(); err == nil {
-			current, _ = store.MatchLive(appData)
+			current, _ = store.MatchLiveAt(platform.CookiesPath(appData))
 		}
 		enrichLiveAccounts(store, profiles)
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

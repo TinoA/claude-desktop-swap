@@ -31,8 +31,15 @@ type liveMatcher interface {
 	MatchLive(string) (string, profile.Health)
 }
 
+type liveMatcherAt interface {
+	MatchLiveAt(string) (string, profile.Health)
+}
+
 func statusLine(store liveMatcher, appData string) string {
 	name, health := store.MatchLive(appData)
+	if routed, ok := store.(liveMatcherAt); ok {
+		name, health = routed.MatchLiveAt(platform.CookiesPath(appData))
+	}
 	if name == "" {
 		return fmt.Sprintf("Active profile: unknown (live health: %s)", health)
 	}

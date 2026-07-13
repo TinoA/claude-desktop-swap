@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestCheckpointCreatesMinimalSecureV2Profile(t *testing.T) {
+func TestCheckpointCreatesSecureV3ProfileWithAccountState(t *testing.T) {
 	appData := syntheticAppData(t, "live")
 	store := newTestStore(t)
 	if err := store.Checkpoint("work", appData); err != nil {
@@ -20,8 +20,8 @@ func TestCheckpointCreatesMinimalSecureV2Profile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := entryNames(entries); len(got) != 3 || got[0] != cookiesFile || got[1] != localStorageDir || got[2] != metaFile {
-		t.Fatalf("profile artifacts = %v, want Cookies, Local Storage and meta.json", got)
+	if got := entryNames(entries); len(got) != 5 || got[0] != cookiesFile || got[1] != indexedDBDir || got[2] != localStorageDir || got[3] != sessionStorageDir || got[4] != metaFile {
+		t.Fatalf("profile artifacts = %v, want complete account state", got)
 	}
 	assertMode(t, store.profileDir("work"), dirPerm)
 	assertMode(t, filepath.Join(store.profileDir("work"), cookiesFile), filePerm)
@@ -29,12 +29,14 @@ func TestCheckpointCreatesMinimalSecureV2Profile(t *testing.T) {
 	snapshot := filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir, "CURRENT")
 	assertMode(t, filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir), dirPerm)
 	assertMode(t, snapshot, filePerm)
+	assertMode(t, filepath.Join(store.profileDir("work"), indexedDBDir, "data"), filePerm)
+	assertMode(t, filepath.Join(store.profileDir("work"), sessionStorageDir, "data"), filePerm)
 	meta, err := store.loadMeta("work")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.FormatVersion != 2 || meta.ObservedHealth != HealthUsable || meta.CookieDigest == "" || meta.SavedAt.IsZero() {
-		t.Fatalf("incomplete v2 metadata: %+v", meta)
+	if meta.FormatVersion != 3 || meta.ObservedHealth != HealthUsable || meta.CookieDigest == "" || meta.SavedAt.IsZero() {
+		t.Fatalf("incomplete v3 metadata: %+v", meta)
 	}
 }
 
@@ -99,6 +101,31 @@ func TestRestoreRefusesUnsafePermissionsAndIntegrityMismatchBeforeMutation(t *te
 	}
 }
 
+func TestV2CookieIntegrityRemainsEnforced(t *testing.T) {
+	store := newTestStore(t)
+	appData := syntheticAppData(t, "saved")
+	if err := store.Checkpoint("work", appData); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.FormatVersion = 2
+	if err := store.saveMeta("work", meta); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.profileDir("work"), cookiesFile)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	createCookiesDBWithMarker(t, path, "tampered")
+
+	if got := store.Inspect("work"); got.Health != HealthUnknown {
+		t.Fatalf("v2 integrity health = %s, want unknown", got.Health)
+	}
+}
+
 func TestHealthyV1RestoresAndMigratesOnlyOnCheckpoint(t *testing.T) {
 	store := newTestStore(t)
 	v1 := store.profileDir("legacy")
@@ -123,7 +150,7 @@ func TestHealthyV1RestoresAndMigratesOnlyOnCheckpoint(t *testing.T) {
 		t.Fatal("legacy payload remains after v2 commit")
 	}
 	meta, _ := store.loadMeta("legacy")
-	if meta.FormatVersion != 2 {
+	if meta.FormatVersion != 3 {
 		t.Fatalf("format version = %d", meta.FormatVersion)
 	}
 }
@@ -169,9 +196,15 @@ func TestStoreRecoversBackupAndRemovesOrphanStage(t *testing.T) {
 	}
 }
 
-func TestRestoreReplacesCookiesRestoresLocalStorageAndPreservesGlobalState(t *testing.T) {
+func TestRestoreReplacesCompleteAccountStateAndPreservesGlobalState(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "saved")
+	db := openSQLite(t, filepath.Join(saved, cookiesFile))
+	mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', 'cf_clearance', 0, '', x'03')`)
+	mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', '__cf_bm', 0, '', x'04')`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Checkpoint("work", saved); err != nil {
 		t.Fatal(err)
 	}
@@ -191,10 +224,19 @@ func TestRestoreReplacesCookiesRestoresLocalStorageAndPreservesGlobalState(t *te
 	if got, err := os.ReadFile(restored); err != nil || string(got) != "saved" {
 		t.Fatalf("Local Storage not restored from snapshot: %q %v", got, err)
 	}
-	for _, path := range []string{filepath.Join(live, indexedDBDir), filepath.Join(live, sessionStorageDir)} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("ephemeral path remains: %s", path)
+	for _, path := range []string{filepath.Join(indexedDBDir, "data"), filepath.Join(sessionStorageDir, "data")} {
+		if got, err := os.ReadFile(filepath.Join(live, path)); err != nil || string(got) != "saved" {
+			t.Fatalf("%s not restored from snapshot: %q %v", path, got, err)
 		}
+	}
+	db = openSQLite(t, filepath.Join(live, cookiesFile))
+	defer db.Close()
+	var securityCookies int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM cookies WHERE name IN ('cf_clearance', '__cf_bm')`).Scan(&securityCookies); err != nil {
+		t.Fatal(err)
+	}
+	if securityCookies != 2 {
+		t.Fatalf("restored security cookies = %d, want 2", securityCookies)
 	}
 	for _, name := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
 		if _, err := os.Stat(filepath.Join(live, name)); !os.IsNotExist(err) {
@@ -209,7 +251,7 @@ func TestRestoreReplacesCookiesRestoresLocalStorageAndPreservesGlobalState(t *te
 	}
 }
 
-func TestRestoreWithoutSnapshotLeavesLocalStorageCleared(t *testing.T) {
+func TestRestoreWithoutSnapshotLeavesAccountStateCleared(t *testing.T) {
 	store := newTestStore(t)
 	saved := t.TempDir()
 	createCookiesDBWithMarker(t, filepath.Join(saved, cookiesFile), "saved")
@@ -220,8 +262,10 @@ func TestRestoreWithoutSnapshotLeavesLocalStorageCleared(t *testing.T) {
 	if err := store.Restore("work", live); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(live, localStorageDir, leveldbDir)); !os.IsNotExist(err) {
-		t.Fatal("live Local Storage should stay cleared when the profile has no snapshot")
+	for _, path := range []string{filepath.Join(localStorageDir, leveldbDir), indexedDBDir, sessionStorageDir} {
+		if _, err := os.Stat(filepath.Join(live, path)); !os.IsNotExist(err) {
+			t.Fatalf("live %s should stay cleared when the profile has no snapshot", path)
+		}
 	}
 }
 
@@ -233,6 +277,12 @@ func TestRestoreTrackingFailureRollsBackCookies(t *testing.T) {
 	}
 	live := syntheticAppData(t, "live")
 	before, _ := cookieDigest(filepath.Join(live, cookiesFile))
+	localPath := filepath.Join(live, localStorageDir, leveldbDir, "CURRENT")
+	localBefore, _ := os.ReadFile(localPath)
+	indexedPath := filepath.Join(live, indexedDBDir, "data")
+	indexedBefore, _ := os.ReadFile(indexedPath)
+	sessionPath := filepath.Join(live, sessionStorageDir, "data")
+	sessionBefore, _ := os.ReadFile(sessionPath)
 	if err := os.Mkdir(filepath.Join(store.baseDir, currentFileName), dirPerm); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +293,45 @@ func TestRestoreTrackingFailureRollsBackCookies(t *testing.T) {
 	after, _ := cookieDigest(filepath.Join(live, cookiesFile))
 	if after != before {
 		t.Fatal("live Cookies were not rolled back")
+	}
+	localAfter, _ := os.ReadFile(localPath)
+	if string(localAfter) != string(localBefore) {
+		t.Fatal("live Local Storage was not rolled back")
+	}
+	indexedAfter, _ := os.ReadFile(indexedPath)
+	if string(indexedAfter) != string(indexedBefore) {
+		t.Fatal("live IndexedDB was not rolled back")
+	}
+	sessionAfter, _ := os.ReadFile(sessionPath)
+	if string(sessionAfter) != string(sessionBefore) {
+		t.Fatal("live Session Storage was not rolled back")
+	}
+}
+
+func TestRestoreFailureRemovesNewAccountStateWhenLiveHadNone(t *testing.T) {
+	store := newTestStore(t)
+	saved := syntheticAppData(t, "saved")
+	if err := store.Checkpoint("work", saved); err != nil {
+		t.Fatal(err)
+	}
+	live := t.TempDir()
+	createCookiesDBWithMarker(t, filepath.Join(live, cookiesFile), "live")
+	before, _ := cookieDigest(filepath.Join(live, cookiesFile))
+	if err := os.Mkdir(filepath.Join(store.baseDir, currentFileName), dirPerm); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Restore("work", live); err == nil {
+		t.Fatal("Restore should fail when tracking cannot commit")
+	}
+	after, _ := cookieDigest(filepath.Join(live, cookiesFile))
+	if after != before {
+		t.Fatal("live Cookies were not rolled back")
+	}
+	for _, path := range []string{filepath.Join(localStorageDir, leveldbDir), indexedDBDir, sessionStorageDir} {
+		if _, err := os.Stat(filepath.Join(live, path)); !os.IsNotExist(err) {
+			t.Fatalf("new account state remains after rollback: %s", path)
+		}
 	}
 }
 
@@ -314,7 +403,7 @@ func createCookiesDBWithMarker(t *testing.T, path, marker string) {
 	db := openSQLite(t, path)
 	mustExec(t, db, `CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER, value TEXT, encrypted_value BLOB)`)
 	mustExec(t, db, `CREATE TABLE fixture_marker (marker TEXT)`)
-	mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', 'sessionKey', 0, 'secret', x'0102')`)
+	mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', 'sessionKey', 0, ?, ?)`, marker, []byte(marker))
 	mustExec(t, db, `INSERT INTO fixture_marker VALUES (?)`, marker)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)

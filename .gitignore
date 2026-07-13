@@ -1,5 +1,6 @@
 claude-desktop-swap
 claude-desktop-swap.exe
+*.exe
 dist/
 *.test
 coverage.out
