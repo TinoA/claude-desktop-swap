@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const githubReleaseAPI = "https://api.github.com/repos/FranCalveyra/claude-desktop-swap/releases/latest"
+const githubReleaseAPI = "https://api.github.com/repos/TinoA/claude-desktop-swap/releases/latest"
 
 type githubRelease struct {
 	TagName    string `json:"tag_name"`
