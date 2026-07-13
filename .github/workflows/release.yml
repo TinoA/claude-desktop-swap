@@ -25,7 +25,6 @@ jobs:
         uses: googleapis/release-please-action@v4
         with:
           release-type: go
-          package-name: github.com/FranCalveyra/claude-desktop-swap
           target-branch: main
 
   archives:
@@ -81,16 +80,10 @@ jobs:
           $version = $env:VERSION.TrimStart('v')
           go build -trimpath -ldflags "-s -w -X github.com/FranCalveyra/claude-desktop-swap/cmd.Version=$version" -o "installer/dist/windows_$env:GOARCH/claude-desktop-swap.exe" .
 
-      - uses: ilammy/setup-innosetup@v2
-
-      - name: Build installer
-        shell: pwsh
-        env:
-          ARCH: ${{ matrix.arch }}
-          VERSION: ${{ needs.version.outputs.tag_name }}
-        run: |
-          $version = $env:VERSION.TrimStart('v')
-          iscc "/DAppArch=$env:ARCH" "/DAppVersion=$version" installer/windows-claude-swap.iss
+      - uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: installer/windows-claude-swap.iss
+          options: /DAppArch=${{ matrix.arch }} /DAppVersion=${{ needs.version.outputs.tag_name }}
 
       - name: Upload installer
         shell: pwsh
