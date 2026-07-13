@@ -1,0 +1,592 @@
+//go:build windows
+
+package cmd
+
+import (
+	"errors"
+	"fmt"
+	"runtime"
+	"strings"
+	"sync"
+	"unicode/utf16"
+	"unsafe"
+
+	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
+	"golang.org/x/sys/windows"
+)
+
+const (
+	nativeWMCommand       = 0x0111
+	nativeWMKeyDown       = 0x0100
+	nativeWMClose         = 0x0010
+	nativeWMDestroy       = 0x0002
+	nativeWMPaint         = 0x000F
+	nativeWMTimer         = 0x0113
+	nativeWMSetFont       = 0x0030
+	nativeVKEscape        = 0x1B
+	nativeWSChild         = 0x40000000
+	nativeWSVisible       = 0x10000000
+	nativeWSBorder        = 0x00800000
+	nativeWSCaption       = 0x00C00000
+	nativeWSSysMenu       = 0x00080000
+	nativeWSPopup         = 0x80000000
+	nativeWSExLayered     = 0x00080000
+	nativeWSExTopmost     = 0x00000008
+	nativeWSExToolWindow  = 0x00000080
+	nativeWSExDialogFrame = 0x00000001
+	nativeWSTabStop       = 0x00010000
+	nativeBSDefault       = 0x00000001
+	nativeESPassword      = 0x00000020
+	nativeESAutoHScroll   = 0x00000080
+	nativeSMCXScreen      = 0
+	nativeSMCYScreen      = 1
+	nativeSMCXVirtual     = 78
+	nativeSMCYVirtual     = 79
+	nativeSMXVirtual      = 76
+	nativeSMYVirtual      = 77
+	nativeSWShow          = 5
+	nativeSWHide          = 0
+	nativeLayeredAlpha    = 0x00000002
+	nativeTimerID         = 1
+	nativeDIIcon          = 0x00000003
+	nativeDTCenter        = 0x00000001
+	nativeDTVCenter       = 0x00000004
+	nativeDTSingleLine    = 0x00000020
+	nativeTransparent     = 1
+	nativeMBYesNoCancel   = 0x00000003
+	nativeMBIconQuestion  = 0x00000020
+	nativeMBIconWarning   = 0x00000030
+	nativeMBSetForeground = 0x00010000
+	nativeMBTopMost       = 0x00040000
+	nativeIDConfirm       = 1001
+	nativeIDCancel        = 1002
+	nativeOFNExplorer     = 0x00080000
+	nativeOFNPathExists   = 0x00000800
+	nativeOFNFileExists   = 0x00001000
+	nativeOFNOverwrite    = 0x00000002
+)
+
+var (
+	nativeUser32            = windows.NewLazySystemDLL("user32.dll")
+	nativeKernel32          = windows.NewLazySystemDLL("kernel32.dll")
+	nativeShell32           = windows.NewLazySystemDLL("shell32.dll")
+	nativeGDI32             = windows.NewLazySystemDLL("gdi32.dll")
+	nativeCommDlg           = windows.NewLazySystemDLL("comdlg32.dll")
+	nativeRegisterClassProc = nativeUser32.NewProc("RegisterClassExW")
+	nativeCreateWindow      = nativeUser32.NewProc("CreateWindowExW")
+	nativeDestroyWindow     = nativeUser32.NewProc("DestroyWindow")
+	nativeDefWindowProc     = nativeUser32.NewProc("DefWindowProcW")
+	nativeDispatch          = nativeUser32.NewProc("DispatchMessageW")
+	nativeGetMessage        = nativeUser32.NewProc("GetMessageW")
+	nativeTranslate         = nativeUser32.NewProc("TranslateMessage")
+	nativePostQuit          = nativeUser32.NewProc("PostQuitMessage")
+	nativePostMessage       = nativeUser32.NewProc("PostMessageW")
+	nativeShowWindow        = nativeUser32.NewProc("ShowWindow")
+	nativeUpdateWindow      = nativeUser32.NewProc("UpdateWindow")
+	nativeSetForeground     = nativeUser32.NewProc("SetForegroundWindow")
+	nativeSetFocus          = nativeUser32.NewProc("SetFocus")
+	nativeGetMetrics        = nativeUser32.NewProc("GetSystemMetrics")
+	nativeSetLayered        = nativeUser32.NewProc("SetLayeredWindowAttributes")
+	nativeSetTimer          = nativeUser32.NewProc("SetTimer")
+	nativeKillTimer         = nativeUser32.NewProc("KillTimer")
+	nativeInvalidate        = nativeUser32.NewProc("InvalidateRect")
+	nativeBeginPaint        = nativeUser32.NewProc("BeginPaint")
+	nativeEndPaint          = nativeUser32.NewProc("EndPaint")
+	nativeSendMessage       = nativeUser32.NewProc("SendMessageW")
+	nativeGetWindowText     = nativeUser32.NewProc("GetWindowTextW")
+	nativeGetTextLength     = nativeUser32.NewProc("GetWindowTextLengthW")
+	nativeMessageBox        = nativeUser32.NewProc("MessageBoxW")
+	nativeDrawIcon          = nativeUser32.NewProc("DrawIconEx")
+	nativeDestroyIcon       = nativeUser32.NewProc("DestroyIcon")
+	nativeGetModule         = nativeKernel32.NewProc("GetModuleHandleW")
+	nativeExtractIconEx     = nativeShell32.NewProc("ExtractIconExW")
+	nativeCreateBrush       = nativeGDI32.NewProc("CreateSolidBrush")
+	nativeDeleteObject      = nativeGDI32.NewProc("DeleteObject")
+	nativeFillRect          = nativeUser32.NewProc("FillRect")
+	nativeSetBkMode         = nativeGDI32.NewProc("SetBkMode")
+	nativeSetTextColor      = nativeGDI32.NewProc("SetTextColor")
+	nativeDrawText          = nativeUser32.NewProc("DrawTextW")
+	nativeCreateFont        = nativeGDI32.NewProc("CreateFontW")
+	nativeSelectObject      = nativeGDI32.NewProc("SelectObject")
+	nativeGetOpenFile       = nativeCommDlg.NewProc("GetOpenFileNameW")
+	nativeGetSaveFile       = nativeCommDlg.NewProc("GetSaveFileNameW")
+	nativeCommDlgError      = nativeCommDlg.NewProc("CommDlgExtendedError")
+)
+
+type nativeWndClassEx struct {
+	cbSize        uint32
+	style         uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     uintptr
+	hIcon         uintptr
+	hCursor       uintptr
+	hbrBackground uintptr
+	lpszMenuName  *uint16
+	lpszClassName *uint16
+	hIconSm       uintptr
+}
+
+type nativeMSG struct {
+	hwnd    uintptr
+	message uint32
+	wParam  uintptr
+	lParam  uintptr
+	time    uint32
+	ptX     int32
+	ptY     int32
+}
+
+type nativeRect struct {
+	left   int32
+	top    int32
+	right  int32
+	bottom int32
+}
+
+type nativePaintStruct struct {
+	hdc         uintptr
+	erase       int32
+	paint       nativeRect
+	restore     int32
+	incUpdate   int32
+	rgbReserved [32]byte
+}
+
+var (
+	nativeInputClassOnce   sync.Once
+	nativeInputClassErr    error
+	nativeInputStatesMu    sync.Mutex
+	nativeInputStates      = make(map[uintptr]*nativeInputState)
+	nativeOverlayClassOnce sync.Once
+	nativeOverlayClassErr  error
+	nativeOverlayStatesMu  sync.Mutex
+	nativeOverlayStates    = make(map[uintptr]*nativeOverlayState)
+)
+
+type nativeInputState struct {
+	edit      uintptr
+	value     string
+	confirmed bool
+}
+
+type nativeOverlayState struct {
+	message string
+	success bool
+	frame   int
+	icon    uintptr
+}
+
+var nativeInputWndProc = windows.NewCallback(nativeInputWindowProc)
+var nativeOverlayWndProc = windows.NewCallback(nativeOverlayWindowProc)
+
+func nativeRegisterClass(name string, proc uintptr) error {
+	hInstance, _, _ := nativeGetModule.Call(0)
+	className := windows.StringToUTF16Ptr(name)
+	windowClass := nativeWndClassEx{
+		cbSize:        uint32(unsafe.Sizeof(nativeWndClassEx{})),
+		lpfnWndProc:   proc,
+		hInstance:     hInstance,
+		lpszClassName: className,
+	}
+	if result, _, err := nativeRegisterClassProc.Call(uintptr(unsafe.Pointer(&windowClass))); result == 0 {
+		if !errors.Is(err, windows.ERROR_CLASS_ALREADY_EXISTS) {
+			return fmt.Errorf("register native window class: %w", err)
+		}
+	}
+	return nil
+}
+
+func nativeRegisterInputClass() error {
+	nativeInputClassOnce.Do(func() {
+		nativeInputClassErr = nativeRegisterClass("WindowsClaudeSwapInput", nativeInputWndProc)
+	})
+	return nativeInputClassErr
+}
+
+func nativeRegisterOverlayClass() error {
+	nativeOverlayClassOnce.Do(func() {
+		nativeOverlayClassErr = nativeRegisterClass("WindowsClaudeSwapOverlay", nativeOverlayWndProc)
+	})
+	return nativeOverlayClassErr
+}
+
+func nativeTrayChoice(title, message string) (trayChoiceValue, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	result, _, err := nativeMessageBox.Call(
+		0,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(message))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
+		nativeMBYesNoCancel|nativeMBIconQuestion|nativeMBSetForeground|nativeMBTopMost,
+	)
+	switch result {
+	case 6:
+		return trayYes, nil
+	case 7:
+		return trayNo, nil
+	case 2:
+		return trayCancel, nil
+	default:
+		return trayCancel, err
+	}
+}
+
+func trayWarning(title, message string) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	nativeMessageBox.Call(
+		0,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(message))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
+		nativeMBIconWarning|nativeMBSetForeground|nativeMBTopMost,
+	)
+}
+
+func trayPrompt(title string) (string, error) {
+	return nativeInputDialog(title, "Nombre del perfil:", false)
+}
+
+func nativeTraySecretPrompt(title, message string) (string, error) {
+	value, err := nativeInputDialog(title, message, true)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", errors.New("la contraseña no puede estar vacía")
+	}
+	return value, nil
+}
+
+func nativeInputDialog(title, message string, password bool) (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := nativeRegisterInputClass(); err != nil {
+		return "", err
+	}
+	width, height := 460, 190
+	screenWidth, _, _ := nativeGetMetrics.Call(nativeSMCXScreen)
+	screenHeight, _, _ := nativeGetMetrics.Call(nativeSMCYScreen)
+	hInstance, _, _ := nativeGetModule.Call(0)
+	state := &nativeInputState{}
+	hwnd, _, err := nativeCreateWindow.Call(
+		nativeWSExTopmost|nativeWSExToolWindow|nativeWSExDialogFrame,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("WindowsClaudeSwapInput"))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
+		nativeWSCaption|nativeWSSysMenu|nativeWSVisible,
+		uintptr((int(screenWidth)-width)/2), uintptr((int(screenHeight)-height)/2),
+		uintptr(width), uintptr(height), 0, 0, hInstance, 0,
+	)
+	if hwnd == 0 {
+		return "", err
+	}
+	nativeInputStatesMu.Lock()
+	nativeInputStates[hwnd] = state
+	nativeInputStatesMu.Unlock()
+	defer func() {
+		nativeInputStatesMu.Lock()
+		delete(nativeInputStates, hwnd)
+		nativeInputStatesMu.Unlock()
+		nativeDestroyWindow.Call(hwnd)
+	}()
+
+	createNativeInputControl("STATIC", message, 20, 20, 410, 35, hwnd, 0, false)
+	editStyle := uint32(nativeWSChild | nativeWSVisible | nativeWSBorder | nativeWSTabStop | nativeESAutoHScroll)
+	if password {
+		editStyle |= nativeESPassword
+	}
+	edit, _, _ := nativeCreateWindow.Call(
+		0,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("EDIT"))),
+		0,
+		uintptr(editStyle), 20, 65, 410, 28, hwnd, 0, hInstance, 0,
+	)
+	state.edit = edit
+	createNativeInputControl("BUTTON", "Aceptar", 235, 115, 95, 32, hwnd, nativeIDConfirm, true)
+	createNativeInputControl("BUTTON", "Cancelar", 335, 115, 95, 32, hwnd, nativeIDCancel, true)
+	nativeSetForeground.Call(hwnd)
+	nativeSetFocus.Call(edit)
+
+	var messageLoop nativeMSG
+	for {
+		result, _, getErr := nativeGetMessage.Call(uintptr(unsafe.Pointer(&messageLoop)), 0, 0, 0)
+		if int32(result) == -1 {
+			return "", fmt.Errorf("read native dialog message: %w", getErr)
+		}
+		if result == 0 {
+			break
+		}
+		nativeTranslate.Call(uintptr(unsafe.Pointer(&messageLoop)))
+		nativeDispatch.Call(uintptr(unsafe.Pointer(&messageLoop)))
+	}
+	if !state.confirmed {
+		return "", errors.New("dialog cancelled")
+	}
+	return strings.TrimSpace(state.value), nil
+}
+
+func createNativeInputControl(className, text string, x, y, width, height int, parent, id uintptr, button bool) uintptr {
+	style := uintptr(nativeWSChild | nativeWSVisible)
+	if button {
+		style |= nativeWSTabStop
+		if id == nativeIDConfirm {
+			style |= nativeBSDefault
+		}
+	}
+	control, _, _ := nativeCreateWindow.Call(
+		0,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(className))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(text))),
+		style, uintptr(x), uintptr(y), uintptr(width), uintptr(height), parent, id, 0, 0,
+	)
+	if control != 0 {
+		nativeSendMessage.Call(control, nativeWMSetFont, 0, 1)
+	}
+	return control
+}
+
+func nativeInputWindowProc(hwnd, message, wParam, lParam uintptr) uintptr {
+	nativeInputStatesMu.Lock()
+	state := nativeInputStates[hwnd]
+	nativeInputStatesMu.Unlock()
+	if state != nil {
+		switch message {
+		case nativeWMCommand:
+			switch wParam & 0xffff {
+			case nativeIDConfirm:
+				length, _, _ := nativeGetTextLength.Call(state.edit)
+				buffer := make([]uint16, int(length)+1)
+				nativeGetWindowText.Call(state.edit, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+				state.value = windows.UTF16ToString(buffer)
+				state.confirmed = true
+				nativeDestroyWindow.Call(hwnd)
+			case nativeIDCancel:
+				nativeDestroyWindow.Call(hwnd)
+			}
+		case nativeWMKeyDown:
+			if wParam == nativeVKEscape {
+				nativeDestroyWindow.Call(hwnd)
+			}
+		case nativeWMClose:
+			nativeDestroyWindow.Call(hwnd)
+		case nativeWMDestroy:
+			nativePostQuit.Call(0)
+		}
+	}
+	result, _, _ := nativeDefWindowProc.Call(hwnd, message, wParam, lParam)
+	return result
+}
+
+func nativeTrayFileDialog(open bool) (string, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	buffer := make([]uint16, 32768)
+	copy(buffer, windows.StringToUTF16("claude-swap-backup.csb"))
+	filter := nativeBackupFileFilter()
+	defaultExtension, _ := windows.UTF16PtrFromString("csb")
+	dialog := nativeOpenFileName{
+		lStructSize: uint32(unsafe.Sizeof(nativeOpenFileName{})),
+		lpstrFilter: &filter[0],
+		lpstrFile:   &buffer[0],
+		nMaxFile:    uint32(len(buffer)),
+		Flags:       nativeOFNExplorer | nativeOFNPathExists,
+		lpstrDefExt: defaultExtension,
+	}
+	var result uintptr
+	if open {
+		dialog.Flags |= nativeOFNFileExists
+		result, _, _ = nativeGetOpenFile.Call(uintptr(unsafe.Pointer(&dialog)))
+	} else {
+		dialog.Flags |= nativeOFNOverwrite
+		result, _, _ = nativeGetSaveFile.Call(uintptr(unsafe.Pointer(&dialog)))
+	}
+	runtime.KeepAlive(filter)
+	if result == 0 {
+		code, _, _ := nativeCommDlgError.Call()
+		if code != 0 {
+			return "", fmt.Errorf("selector de archivos de Windows falló: 0x%X", code)
+		}
+		return "", nil
+	}
+	return windows.UTF16ToString(buffer), nil
+}
+
+func nativeBackupFileFilter() []uint16 {
+	return utf16.Encode([]rune("Windows Claude Swap backup (*.csb)\x00*.csb\x00Todos los archivos (*.*)\x00*.*\x00\x00"))
+}
+
+type nativeOpenFileName struct {
+	lStructSize       uint32
+	hwndOwner         uintptr
+	hInstance         uintptr
+	lpstrFilter       *uint16
+	lpstrCustomFilter *uint16
+	nMaxCustFilter    uint32
+	nFilterIndex      uint32
+	lpstrFile         *uint16
+	nMaxFile          uint32
+	lpstrFileTitle    *uint16
+	nMaxFileTitle     uint32
+	lpstrInitialDir   *uint16
+	lpstrTitle        *uint16
+	Flags             uint32
+	nFileOffset       uint16
+	nFileExtension    uint16
+	lpstrDefExt       *uint16
+	lCustData         uintptr
+	lpfnHook          uintptr
+	lpTemplateName    *uint16
+	pvReserved        uintptr
+	dwReserved        uint32
+	FlagsEx           uint32
+}
+
+func startNativeOverlay(message string, success bool) *switchOverlay {
+	overlay := &switchOverlay{ready: make(chan error, 1), done: make(chan struct{})}
+	go runNativeOverlay(overlay, message, success)
+	if err := <-overlay.ready; err != nil {
+		return &switchOverlay{}
+	}
+	return overlay
+}
+
+func runNativeOverlay(overlay *switchOverlay, message string, success bool) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := nativeRegisterOverlayClass(); err != nil {
+		overlay.ready <- err
+		close(overlay.done)
+		return
+	}
+	width, _, _ := nativeGetMetrics.Call(nativeSMCXVirtual)
+	height, _, _ := nativeGetMetrics.Call(nativeSMCYVirtual)
+	left, _, _ := nativeGetMetrics.Call(nativeSMXVirtual)
+	top, _, _ := nativeGetMetrics.Call(nativeSMYVirtual)
+	hInstance, _, _ := nativeGetModule.Call(0)
+	state := &nativeOverlayState{message: message, success: success}
+	if provider, ok := platform.Current().(interface{ LaunchPath() string }); ok {
+		state.icon = nativeExtractIcon(provider.LaunchPath())
+	}
+	hwnd, _, _ := nativeCreateWindow.Call(
+		nativeWSExLayered|nativeWSExTopmost|nativeWSExToolWindow,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("WindowsClaudeSwapOverlay"))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Windows Claude Swap"))),
+		nativeWSPopup|nativeWSVisible,
+		left, top, width, height, 0, 0, hInstance, 0,
+	)
+	if hwnd == 0 {
+		if state.icon != 0 {
+			nativeDestroyIcon.Call(state.icon)
+		}
+		overlay.ready <- errors.New("could not create native overlay")
+		close(overlay.done)
+		return
+	}
+	overlay.hwnd = hwnd
+	nativeOverlayStatesMu.Lock()
+	nativeOverlayStates[hwnd] = state
+	nativeOverlayStatesMu.Unlock()
+	nativeSetLayered.Call(hwnd, 0, 180, nativeLayeredAlpha)
+	nativeSetTimer.Call(hwnd, nativeTimerID, 125, 0)
+	nativeShowWindow.Call(hwnd, nativeSWShow)
+	nativeUpdateWindow.Call(hwnd)
+	nativeSetForeground.Call(hwnd)
+	overlay.ready <- nil
+
+	var messageLoop nativeMSG
+	for {
+		result, _, _ := nativeGetMessage.Call(uintptr(unsafe.Pointer(&messageLoop)), 0, 0, 0)
+		if result <= 0 {
+			break
+		}
+		nativeTranslate.Call(uintptr(unsafe.Pointer(&messageLoop)))
+		nativeDispatch.Call(uintptr(unsafe.Pointer(&messageLoop)))
+	}
+	nativeOverlayStatesMu.Lock()
+	delete(nativeOverlayStates, hwnd)
+	nativeOverlayStatesMu.Unlock()
+	close(overlay.done)
+}
+
+func nativeExtractIcon(path string) uintptr {
+	if path == "" {
+		return 0
+	}
+	var large uintptr
+	nativeExtractIconEx.Call(
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(path))),
+		0,
+		uintptr(unsafe.Pointer(&large)),
+		0,
+		1,
+	)
+	return large
+}
+
+func nativeOverlayWindowProc(hwnd, message, wParam, lParam uintptr) uintptr {
+	nativeOverlayStatesMu.Lock()
+	state := nativeOverlayStates[hwnd]
+	nativeOverlayStatesMu.Unlock()
+	if state == nil {
+		result, _, _ := nativeDefWindowProc.Call(hwnd, message, wParam, lParam)
+		return result
+	}
+	switch message {
+	case nativeWMTimer:
+		state.frame++
+		nativeInvalidate.Call(hwnd, 0, 0)
+	case nativeWMPaint:
+		var paint nativePaintStruct
+		hdc, _, _ := nativeBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		if hdc != 0 {
+			brush, _, _ := nativeCreateBrush.Call(0x51565A)
+			nativeFillRect.Call(hdc, uintptr(unsafe.Pointer(&paint.paint)), brush)
+			nativeDeleteObject.Call(brush)
+			nativeSetBkMode.Call(hdc, nativeTransparent)
+			nativeSetTextColor.Call(hdc, 0x00FFFFFF)
+			if state.icon != 0 && !state.success {
+				x := (paint.paint.right - paint.paint.left - 96) / 2
+				nativeDrawIcon.Call(hdc, uintptr(x), 100, state.icon, 96, 96, 0, 0, nativeDIIcon)
+				nativeDrawCenteredText(hdc, []string{"◌", "◍", "◎", "◉"}[state.frame%4], paint.paint, 205)
+			} else {
+				glyph := "✓"
+				if !state.success {
+					glyph = []string{"◌", "◍", "◎", "◉"}[state.frame%4]
+				} else {
+					nativeSetTextColor.Call(hdc, 0x0000FF00)
+				}
+				nativeDrawCenteredText(hdc, glyph, paint.paint, 100)
+				nativeSetTextColor.Call(hdc, 0x00FFFFFF)
+			}
+			nativeDrawCenteredText(hdc, state.message, paint.paint, 260)
+			nativeEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		}
+	case nativeWMClose:
+		nativeKillTimer.Call(hwnd, nativeTimerID)
+		nativeDestroyWindow.Call(hwnd)
+	case nativeWMDestroy:
+		if state.icon != 0 {
+			nativeDestroyIcon.Call(state.icon)
+		}
+		nativePostQuit.Call(0)
+	}
+	result, _, _ := nativeDefWindowProc.Call(hwnd, message, wParam, lParam)
+	return result
+}
+
+func nativeDrawCenteredText(hdc uintptr, text string, bounds nativeRect, centerY int32) {
+	font, _, _ := nativeCreateFont.Call(
+		32, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Segoe UI"))),
+	)
+	if font != 0 {
+		old, _, _ := nativeSelectObject.Call(hdc, font)
+		defer func() {
+			nativeSelectObject.Call(hdc, old)
+			nativeDeleteObject.Call(font)
+		}()
+	}
+	rect := nativeRect{left: bounds.left, top: centerY - 24, right: bounds.right, bottom: centerY + 24}
+	nativeDrawText.Call(hdc, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(text))), ^uintptr(0), uintptr(unsafe.Pointer(&rect)), nativeDTCenter|nativeDTVCenter|nativeDTSingleLine)
+}

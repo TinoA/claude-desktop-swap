@@ -1,8 +1,9 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package platform
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 )
@@ -10,6 +11,10 @@ import (
 type unsupportedPlatform struct{}
 
 func current() Platform { return &unsupportedPlatform{} }
+
+func (u *unsupportedPlatform) IsInstalled() bool { return false }
+
+func (u *unsupportedPlatform) WaitForLoginWindow(context.Context) error { return nil }
 
 func (u *unsupportedPlatform) AppDataPath() (string, error) {
 	return "", fmt.Errorf("platform %q is not yet supported", runtime.GOOS)

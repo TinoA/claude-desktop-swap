@@ -2,8 +2,13 @@ package cmd
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"time"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
@@ -19,69 +24,74 @@ new session as <name>. No manual logout required.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-
-		p := platform.Current()
-		appData, err := p.AppDataPath()
-		if err != nil {
-			return err
+		if dryRun {
+			return printDryRun("add: stop, wipe session, launch, checkpoint; not executed", name)
 		}
 
+		p := platform.Current()
 		store, err := profile.NewStore()
 		if err != nil {
 			return err
 		}
-
-		if store.Exists(name) {
-			return fmt.Errorf("profile %q already exists — pick a different name or run 'delete %s' first", name, name)
-		}
-
-		running, err := p.IsRunning()
+		workflow, err := newAddWorkflow(store, p)
 		if err != nil {
 			return err
 		}
-		if running {
-			fmt.Println("Stopping Claude Desktop...")
-			if err := p.KillApp(); err != nil {
-				return err
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		preparation := startAddPreparationOverlay()
+		err = workflow.Begin(name)
+		if err == nil {
+			err = waitForClaudeLoginWindow(ctx, p)
+		}
+		preparation.Close()
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Claude Desktop is ready. Log in as the new account; registration will finish automatically for %q. Press Ctrl+C to cancel: ", name)
+		if err := workflow.WaitAndComplete(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return errAddCancelled
 			}
-		}
-
-		if profile.HasActiveSession(appData) {
-			current, _ := store.Current()
-			fmt.Printf("Snapshotting current session as %q...\n", current)
-			if err := checkpointTrackedSession(store, appData); err != nil {
-				return fmt.Errorf("snapshot current: %w", err)
-			}
-		}
-
-		fmt.Println("Clearing session state...")
-		if err := store.Wipe(appData); err != nil {
 			return err
 		}
-
-		fmt.Println("Launching Claude Desktop with a fresh session.")
-		if err := p.LaunchApp(); err != nil {
-			return err
+		success := startAddSuccessOverlay()
+		defer success.Close()
+		// Keep the confirmation visible long enough to be noticed while Claude
+		// has already been relaunched with the new profile.
+		select {
+		case <-ctx.Done():
+		case <-time.After(1500 * time.Millisecond):
 		}
-
-		fmt.Printf("\nLog in as the new account in Claude Desktop, then press Enter to snapshot it as %q: ", name)
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-
-		fmt.Println("Stopping Claude Desktop...")
-		if err := p.KillApp(); err != nil {
-			return err
-		}
-
-		if err := store.Checkpoint(name, appData); err != nil {
-			return err
-		}
-		if err := store.Restore(name, appData); err != nil {
-			return fmt.Errorf("post-save cleanup: %w", err)
-		}
-
-		fmt.Printf("Profile %q saved.\n", name)
+		fmt.Printf("Profile %q saved and Claude Desktop restarted.\n", name)
 		return nil
 	},
+}
+
+func waitForClaudeLoginWindow(ctx context.Context, p platform.Platform) error {
+	waiter, ok := p.(platform.LoginWindowWaiter)
+	if !ok {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	if err := waiter.WaitForLoginWindow(waitCtx); errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	} else {
+		return err
+	}
+}
+
+func confirmAddFromInput(input io.Reader, workflow *addWorkflow) error {
+	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil {
+		cancelErr := workflow.Cancel()
+		if cancelErr != nil {
+			return fmt.Errorf("login confirmation failed: %w; recovery failed: %v", err, cancelErr)
+		}
+		return fmt.Errorf("login confirmation cancelled: %w", err)
+	}
+	return nil
 }
 
 type trackedCheckpointer interface {
@@ -93,6 +103,9 @@ func checkpointTrackedSession(store trackedCheckpointer, appData string) error {
 	current, _ := store.Current()
 	if current == "" {
 		return fmt.Errorf("active session has no tracked profile; save it before continuing")
+	}
+	if routed, ok := store.(pathCheckpointer); ok {
+		return routed.CheckpointAt(current, appData, platform.CookiesPath(appData))
 	}
 	return store.Checkpoint(current, appData)
 }

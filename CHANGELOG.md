@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Preserve per-account Local Storage, IndexedDB, Session Storage, and Cloudflare security cookies during switches to avoid unnecessary device or human verification prompts.
+- Roll back every replaced account-state directory when a restore fails, including paths that did not exist before the attempted switch.
+- Refresh the active profile before export and refuse incomplete legacy-profile backups; imports identify accounts that still need a one-time refresh.
+
 ## [0.3.1] - 2026-06-19
 
 ### Added

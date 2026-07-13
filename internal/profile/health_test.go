@@ -68,45 +68,6 @@ func TestCheckpointCookiesFlushesWAL(t *testing.T) {
 	}
 }
 
-func TestStripVolatileCookiesRemovesOnlyBlocklisted(t *testing.T) {
-	path := filepath.Join(t.TempDir(), cookiesFile)
-	db := openSQLite(t, path)
-	mustExec(t, db, `PRAGMA journal_mode=WAL`)
-	mustExec(t, db, `CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER)`)
-	mustExec(t, db, `INSERT INTO cookies VALUES ('.claude.ai', 'sessionKey', 0)`)
-	mustExec(t, db, `INSERT INTO cookies VALUES ('.claude.ai', 'cf_clearance', 0)`)
-	mustExec(t, db, `INSERT INTO cookies VALUES ('.claude.ai', '__cf_bm', 0)`)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := StripVolatileCookies(path); err != nil {
-		t.Fatalf("StripVolatileCookies: %v", err)
-	}
-
-	db = openSQLite(t, path)
-	defer db.Close()
-	var names []string
-	rows, err := db.Query(`SELECT name FROM cookies ORDER BY name`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, name)
-	}
-	if len(names) != 1 || names[0] != "sessionKey" {
-		t.Fatalf("remaining cookies = %v, want [sessionKey]", names)
-	}
-	if info, err := os.Stat(path + "-wal"); err == nil && info.Size() != 0 {
-		t.Fatalf("WAL size = %d, want 0 after strip", info.Size())
-	}
-}
-
 func TestInspectCookiesReturnsUnknownWhenDatabaseIsLocked(t *testing.T) {
 	path := filepath.Join(t.TempDir(), cookiesFile)
 	createCookiesDB(t, path, ".claude.ai", "sessionKey", 0)

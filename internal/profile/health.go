@@ -89,37 +89,6 @@ func inspectCookiesWithTimeout(path string, now time.Time, timeout time.Duration
 	return Inspection{Health: HealthUsable, Reason: "Claude session evidence is locally usable"}
 }
 
-// volatileCookieNames are device/IP-bound Cloudflare cookies that hard-fail
-// when a stale snapshot value is injected. Deleting them lets Cloudflare
-// reissue fresh ones on first load instead of rejecting the request.
-var volatileCookieNames = []string{"cf_clearance", "__cf_bm"}
-
-// StripVolatileCookies deletes the volatile cookies from a Cookies DB and
-// folds the change into the main file via a TRUNCATE checkpoint, so a later
-// removal of the -wal sidecar cannot discard the delete.
-func StripVolatileCookies(path string) error {
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(volatileCookieNames)), ",")
-	args := make([]any, len(volatileCookieNames))
-	for i, name := range volatileCookieNames {
-		args[i] = name
-	}
-	if _, err := db.Exec(`DELETE FROM cookies WHERE name IN (`+placeholders+`)`, args...); err != nil {
-		return err
-	}
-	var busy, logFrames, checkpointed int
-	if err := db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed); err != nil {
-		return err
-	}
-	return nil
-}
-
 func CheckpointCookies(path string) error {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -147,4 +116,42 @@ func cookieDigest(path string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// SessionDigest hashes only the encrypted Claude session cookie. Unlike a
+// whole-file digest, this remains stable when Chromium refreshes unrelated
+// cookies or rewrites SQLite metadata.
+func SessionDigest(path string) (string, error) {
+	dsn := &url.URL{Scheme: "file", Path: sqlitePath(path)}
+	query := dsn.Query()
+	query.Set("mode", "ro")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", inspectionTimeout.Milliseconds()))
+	dsn.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", dsn.String())
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), inspectionTimeout)
+	defer cancel()
+
+	var encrypted []byte
+	var plain string
+	err = db.QueryRowContext(ctx, `
+		SELECT encrypted_value, value
+		FROM cookies
+		WHERE host_key IN ('.claude.ai', 'claude.ai') AND name = 'sessionKey'
+		LIMIT 1`).Scan(&encrypted, &plain)
+	if err != nil {
+		return "", err
+	}
+	if len(encrypted) == 0 {
+		encrypted = []byte(plain)
+	}
+	if len(encrypted) == 0 {
+		return "", errors.New("session cookie has no value")
+	}
+	h := sha256.Sum256(encrypted)
+	return fmt.Sprintf("%x", h[:]), nil
 }
