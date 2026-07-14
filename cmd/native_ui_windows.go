@@ -245,7 +245,7 @@ func trayWarning(title, message string) {
 }
 
 func trayPrompt(title string) (string, error) {
-	return nativeInputDialog(title, "Nombre del perfil:", false)
+	return nativeInputDialog(title, "Profile name:", false)
 }
 
 func nativeTraySecretPrompt(title, message string) (string, error) {
@@ -254,7 +254,7 @@ func nativeTraySecretPrompt(title, message string) (string, error) {
 		return "", err
 	}
 	if strings.TrimSpace(value) == "" {
-		return "", errors.New("la contraseña no puede estar vacía")
+		return "", errors.New("password cannot be empty")
 	}
 	return value, nil
 }
@@ -303,8 +303,8 @@ func nativeInputDialog(title, message string, password bool) (string, error) {
 		uintptr(editStyle), 20, 65, 410, 28, hwnd, 0, hInstance, 0,
 	)
 	state.edit = edit
-	createNativeInputControl("BUTTON", "Aceptar", 235, 115, 95, 32, hwnd, nativeIDConfirm, true)
-	createNativeInputControl("BUTTON", "Cancelar", 335, 115, 95, 32, hwnd, nativeIDCancel, true)
+	createNativeInputControl("BUTTON", "OK", 235, 115, 95, 32, hwnd, nativeIDConfirm, true)
+	createNativeInputControl("BUTTON", "Cancel", 335, 115, 95, 32, hwnd, nativeIDCancel, true)
 	nativeSetForeground.Call(hwnd)
 	nativeSetFocus.Call(edit)
 
@@ -405,7 +405,7 @@ func nativeTrayFileDialog(open bool) (string, error) {
 	if result == 0 {
 		code, _, _ := nativeCommDlgError.Call()
 		if code != 0 {
-			return "", fmt.Errorf("selector de archivos de Windows falló: 0x%X", code)
+			return "", fmt.Errorf("Windows file picker failed: 0x%X", code)
 		}
 		return "", nil
 	}
@@ -413,7 +413,7 @@ func nativeTrayFileDialog(open bool) (string, error) {
 }
 
 func nativeBackupFileFilter() []uint16 {
-	return utf16.Encode([]rune("Windows Claude Swap backup (*.csb)\x00*.csb\x00Todos los archivos (*.*)\x00*.*\x00\x00"))
+	return utf16.Encode([]rune("Windows Claude Swap backup (*.csb)\x00*.csb\x00All files (*.*)\x00*.*\x00\x00"))
 }
 
 type nativeOpenFileName struct {

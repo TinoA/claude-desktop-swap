@@ -83,26 +83,26 @@ func (s *trayState) ready() {
 	systray.SetTitle(ProductName)
 	systray.SetTooltip(ProductName + " - Claude Desktop account switcher")
 
-	s.status = systray.AddMenuItem("Estado: listo", "Estado de la última operación")
+	s.status = systray.AddMenuItem("Status: Ready", "Last operation status")
 	s.status.Disable()
-	s.root = systray.AddMenuItem("Cuentas", "Cambiar de cuenta")
-	s.add = systray.AddMenuItem("Agregar cuenta...", "Abrir Claude para iniciar sesión con otra cuenta")
-	s.delete = systray.AddMenuItem("Eliminar cuenta...", "Eliminar una copia local del switcher")
-	s.finish = systray.AddMenuItem("Finalizar registro", "Guardar la cuenta después de iniciar sesión")
+	s.root = systray.AddMenuItem("Accounts", "Switch account")
+	s.add = systray.AddMenuItem("Add account...", "Open Claude to sign in with another account")
+	s.delete = systray.AddMenuItem("Delete account...", "Delete a local Switcher copy")
+	s.finish = systray.AddMenuItem("Finish setup", "Save the account after signing in")
 	s.finish.Hide()
-	s.cancel = systray.AddMenuItem("Cancelar y restaurar cuenta anterior", "Cancelar el alta y recuperar la cuenta anterior")
+	s.cancel = systray.AddMenuItem("Cancel and restore previous account", "Cancel setup and restore the previous account")
 	s.cancel.Hide()
 	systray.AddSeparator()
-	s.export = systray.AddMenuItem("Backup", "Guardar o restaurar cuentas y sesiones")
-	s.exportPassword = s.export.AddSubMenuItem("Con contraseña...", "Crear un backup portable cifrado con contraseña")
-	s.exportLocal = s.export.AddSubMenuItem("Sin contraseña...", "Proteger el backup con este usuario de Windows")
-	s.importer = systray.AddMenuItem("Importar backup", "Detectar automáticamente y restaurar un backup")
-	s.update = systray.AddMenuItem("Nueva versión disponible", "Abrir la última versión de Windows Claude Swap")
+	s.export = systray.AddMenuItem("Backup", "Save or restore accounts and sessions")
+	s.exportPassword = s.export.AddSubMenuItem("Password-protected...", "Create a portable, password-protected backup")
+	s.exportLocal = s.export.AddSubMenuItem("Without password...", "Protect the backup with this Windows account")
+	s.importer = systray.AddMenuItem("Import backup", "Automatically detect and restore a backup")
+	s.update = systray.AddMenuItem("New version available", "Open the latest Windows Claude Swap release")
 	s.update.Hide()
 	systray.AddSeparator()
-	s.version = systray.AddMenuItem("Versión actual: "+displayVersion(Version), "Versión instalada de Windows Claude Swap")
+	s.version = systray.AddMenuItem("Current version: "+displayVersion(Version), "Installed Windows Claude Swap version")
 	s.version.Disable()
-	quit := systray.AddMenuItem("Salir", "Cerrar el icono de bandeja")
+	quit := systray.AddMenuItem("Exit", "Close the tray icon")
 
 	s.loadAccounts()
 	s.restorePendingIfPresent()
@@ -127,10 +127,10 @@ func (s *trayState) ready() {
 func (s *trayState) handleAdd() {
 	for range s.add.ClickedCh {
 		if s.workflowSnapshot() != nil {
-			s.setStatus("Ya existe una operación activa")
+			s.setStatus("An operation is already in progress")
 			continue
 		}
-		name, err := s.promptNewProfileName("Nombre de la cuenta guardada")
+		name, err := s.promptNewProfileName("Saved account name")
 		if err != nil {
 			continue
 		}
@@ -155,7 +155,7 @@ func (s *trayState) handleAdd() {
 			cancel()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
-					err = errors.New("claude no mostró la ventana de inicio de sesión a tiempo")
+					err = errors.New("Claude did not show the sign-in window in time")
 				}
 				if recoverErr := workflow.Cancel(); recoverErr != nil && !errors.Is(recoverErr, errAddHandled) {
 					err = fmt.Errorf("%w; recover previous account: %v", err, recoverErr)
@@ -174,7 +174,7 @@ func (s *trayState) handleAdd() {
 		s.setWorkflow(workflow)
 		s.finish.Show()
 		s.cancel.Show()
-		s.setStatus("Esperando login: " + name)
+		s.setStatus("Waiting for sign-in: " + name)
 		s.disableAccounts(true)
 		go s.autoComplete(workflow)
 	}
@@ -188,9 +188,9 @@ func (s *trayState) handleBackupExport(item *systray.MenuItem, local bool) {
 		}
 		password := ""
 		if !local {
-			password, err = traySecretPrompt("Contraseña del backup", "Escribe una contraseña para cifrar todas las cuentas guardadas")
+			password, err = traySecretPrompt("Backup password", "Enter a password to encrypt all saved accounts")
 			if err != nil {
-				s.setStatus("Backup cancelado")
+				s.setStatus("Backup cancelled")
 				continue
 			}
 		}
@@ -198,9 +198,9 @@ func (s *trayState) handleBackupExport(item *systray.MenuItem, local bool) {
 		s.exportPassword.Disable()
 		s.exportLocal.Disable()
 		if local {
-			s.setStatus("Protegiendo backup en este equipo...")
+			s.setStatus("Protecting backup on this device...")
 		} else {
-			s.setStatus("Exportando backup portable...")
+			s.setStatus("Exporting portable backup...")
 		}
 		go func(path, password string, local bool) {
 			lock, lockErr := acquireOperationLock("operation")
@@ -221,12 +221,12 @@ func (s *trayState) handleBackupExport(item *systray.MenuItem, local bool) {
 			s.exportPassword.Enable()
 			s.exportLocal.Enable()
 			if lockErr != nil {
-				s.setStatus("Error exportando backup: " + lockErr.Error())
+				s.setStatus("Backup export error: " + lockErr.Error())
 				if incomplete, checkErr := s.store.IncompleteProfiles(); checkErr == nil && len(incomplete) > 0 {
-					trayWarning("Cuentas pendientes", "Antes del backup abre y verifica estas cuentas, luego cambia a otra para actualizarlas:\n\n"+strings.Join(incomplete, ", "))
+					trayWarning("Accounts need attention", "Before creating a backup, open and verify these accounts, then switch to another account to update them:\n\n"+strings.Join(incomplete, ", "))
 				}
 			} else {
-				s.setStatus("Backup exportado correctamente")
+				s.setStatus("Backup exported successfully")
 			}
 		}(path, password, local)
 	}
@@ -240,19 +240,19 @@ func (s *trayState) handleBackupImport() {
 		}
 		protection, err := profile.DetectBackupProtection(path)
 		if err != nil {
-			s.setStatus("Error leyendo backup: " + err.Error())
+			s.setStatus("Backup read error: " + err.Error())
 			continue
 		}
 		password := ""
 		if protection == profile.BackupProtectionPassword {
-			password, err = traySecretPrompt("Contraseña del backup", "Escribe la contraseña para descifrar las cuentas")
+			password, err = traySecretPrompt("Backup password", "Enter the password to decrypt the accounts")
 			if err != nil {
-				s.setStatus("Importación cancelada")
+				s.setStatus("Import cancelled")
 				continue
 			}
 		}
 		s.importer.Disable()
-		s.setStatus("Importando backup...")
+		s.setStatus("Importing backup...")
 		go func() {
 			lock, lockErr := acquireOperationLock("operation")
 			if lockErr == nil {
@@ -261,12 +261,12 @@ func (s *trayState) handleBackupImport() {
 			}
 			s.importer.Enable()
 			if lockErr != nil {
-				s.setStatus("Error importando backup: " + lockErr.Error())
+				s.setStatus("Backup import error: " + lockErr.Error())
 			} else {
 				s.loadAccounts()
-				s.setStatus("Backup importado; elige una cuenta para activarla")
+				s.setStatus("Backup imported; choose an account to activate it")
 				if incomplete, checkErr := s.store.IncompleteProfiles(); checkErr == nil && len(incomplete) > 0 {
-					trayWarning("Backup antiguo importado", "Estas cuentas necesitan abrirse y verificarse una vez antes de crear un nuevo backup completo:\n\n"+strings.Join(incomplete, ", "))
+					trayWarning("Older backup imported", "These accounts must be opened and verified once before creating a new complete backup:\n\n"+strings.Join(incomplete, ", "))
 				}
 			}
 		}()
@@ -275,15 +275,15 @@ func (s *trayState) handleBackupImport() {
 
 func (s *trayState) resolveBackupProfile(current string) (string, error) {
 	if current != "" && s.store.Exists(current) {
-		choice, err := trayChoice("Confirmar cuenta activa", "La sesión abierta no coincide exactamente con la copia de "+current+".\n\nSí: actualizar esa cuenta.\nNo: guardarla como una cuenta nueva.")
+		choice, err := trayChoice("Confirm active account", "The open session does not exactly match the saved copy of "+current+".\n\nYes: update that account.\nNo: save it as a new account.")
 		if err != nil || choice == trayCancel {
-			return "", errors.New("backup cancelado")
+			return "", errors.New("backup cancelled")
 		}
 		if choice == trayYes {
 			return current, nil
 		}
 	}
-	return s.promptNewProfileName("Guardar cuenta antes del backup")
+	return s.promptNewProfileName("Save account before backup")
 }
 
 func (s *trayState) handleFinish() {
@@ -294,7 +294,7 @@ func (s *trayState) handleFinish() {
 		}
 		s.finish.Disable()
 		s.cancel.Disable()
-		s.setStatus("Guardando cuenta: " + workflow.Name())
+		s.setStatus("Saving account: " + workflow.Name())
 		go func() {
 			err := completeWithSuccessOverlay(workflow)
 			if errors.Is(err, errAddHandled) {
@@ -308,7 +308,7 @@ func (s *trayState) handleFinish() {
 			if err != nil {
 				s.setStatus("Error: " + err.Error())
 			} else {
-				s.setStatus("Cuenta activa: " + workflow.Name())
+				s.setStatus("Active account: " + workflow.Name())
 				s.loadAccounts()
 			}
 		}()
@@ -323,7 +323,7 @@ func (s *trayState) handleCancel() {
 		}
 		s.finish.Disable()
 		s.cancel.Disable()
-		s.setStatus("Restaurando cuenta anterior...")
+		s.setStatus("Restoring previous account...")
 		go func() {
 			err := workflow.Cancel()
 			if errors.Is(err, errAddHandled) {
@@ -335,9 +335,9 @@ func (s *trayState) handleCancel() {
 			s.add.Enable()
 			s.disableAccounts(false)
 			if err != nil {
-				s.setStatus("Error de recuperación: " + err.Error())
+				s.setStatus("Recovery error: " + err.Error())
 			} else {
-				s.setStatus("Cuenta anterior restaurada")
+				s.setStatus("Previous account restored")
 				s.loadAccounts()
 			}
 		}()
@@ -347,7 +347,7 @@ func (s *trayState) handleCancel() {
 func (s *trayState) handleUpdate() {
 	for range s.update.ClickedCh {
 		if err := openLatestRelease(); err != nil {
-			s.setStatus("Error abriendo actualización: " + err.Error())
+			s.setStatus("Update opening error: " + err.Error())
 		}
 	}
 }
@@ -399,6 +399,16 @@ func (s *trayState) saveClosedSession(p platform.Platform) {
 	if health != profile.HealthUsable || matched != current {
 		return
 	}
+	if s.store.IdentityEmailChangedAt(current, platform.CookiesPath(appData)) {
+		choice, err := trayChoice(
+			"Email updated",
+			"This appears to be the same account, but the email changed.\n\nUpdate the profile information?",
+		)
+		if err != nil || choice != trayYes {
+			s.setStatus("Session closed; profile was not updated")
+			return
+		}
+	}
 	lock, err := acquireOperationLock("operation")
 	if err != nil {
 		return
@@ -412,7 +422,7 @@ func (s *trayState) saveClosedSession(p platform.Platform) {
 		return
 	}
 	if err := saveProfileWith(current, s.store, p, io.Discard); err != nil {
-		s.setStatus("No se pudo guardar la sesión cerrada: " + err.Error())
+		s.setStatus("Could not save closed session: " + err.Error())
 	}
 }
 
@@ -425,7 +435,7 @@ func (s *trayState) monitorUpdates() {
 		release, err := latestGitHubRelease(ctx)
 		cancel()
 		if err == nil && updateAvailable(Version, release.TagName) {
-			s.update.SetTitle("Nueva versión disponible: " + release.TagName)
+			s.update.SetTitle("New version available: " + release.TagName)
 			s.update.Show()
 		}
 		ticker := time.NewTimer(6 * time.Hour)
@@ -443,7 +453,7 @@ func (s *trayState) restorePendingIfPresent() {
 	}
 	workflow, err := newPendingAddWorkflow(s.store, platform.Current())
 	if err != nil {
-		s.setStatus("Operación pendiente requiere recuperación manual")
+		s.setStatus("Pending operation requires manual recovery")
 		return
 	}
 	s.setWorkflow(workflow)
@@ -451,7 +461,7 @@ func (s *trayState) restorePendingIfPresent() {
 	s.cancel.Show()
 	s.add.Disable()
 	s.disableAccounts(true)
-	s.setStatus("Operación pendiente: " + workflow.Name())
+	s.setStatus("Pending operation: " + workflow.Name())
 	go s.autoComplete(workflow)
 }
 
@@ -475,10 +485,10 @@ func (s *trayState) autoComplete(workflow *addWorkflow) {
 	s.add.Enable()
 	s.disableAccounts(false)
 	if err != nil {
-		s.setStatus("Error agregando cuenta: " + err.Error())
+		s.setStatus("Account add error: " + err.Error())
 		return
 	}
-	s.setStatus("Cuenta agregada: " + workflow.Name())
+	s.setStatus("Account added: " + workflow.Name())
 	s.loadAccounts()
 }
 
@@ -498,7 +508,7 @@ func (s *trayState) detectInitialLive() {
 		return
 	}
 	if !platform.Installed() {
-		s.setStatus("Claude Desktop no está instalado o no fue detectado")
+		s.setStatus("Claude Desktop is not installed or was not detected")
 		return
 	}
 	p := platform.Current()
@@ -509,7 +519,7 @@ func (s *trayState) detectInitialLive() {
 	live := platform.CookiesPath(appData)
 	running, err := p.IsRunning()
 	if err != nil {
-		s.setStatus("No se pudo comprobar Claude Desktop: " + err.Error())
+		s.setStatus("Could not verify Claude Desktop: " + err.Error())
 		return
 	}
 	inspection := profile.InspectCookies(live, time.Now())
@@ -518,7 +528,7 @@ func (s *trayState) detectInitialLive() {
 		_, digestErr := profile.SessionDigest(live)
 		hasSession = digestErr == nil
 		if digestErr != nil {
-			s.setStatus("Claude Desktop detectado, pero no se pudo verificar su sesión")
+			s.setStatus("Claude Desktop detected, but its session could not be verified")
 			return
 		}
 	}
@@ -528,7 +538,7 @@ func (s *trayState) detectInitialLive() {
 	if matched != "" {
 		if current != matched {
 			if err := s.store.SetCurrent(matched); err != nil {
-				s.setStatus("No se pudo registrar la cuenta activa: " + err.Error())
+				s.setStatus("Could not register the active account: " + err.Error())
 				return
 			}
 			s.loadAccounts()
@@ -536,55 +546,55 @@ func (s *trayState) detectInitialLive() {
 		return
 	}
 	if !hasSession {
-		s.setStatus("Claude Desktop detectado sin una cuenta iniciada")
+		s.setStatus("Claude Desktop detected without a signed-in account")
 		return
 	}
 	if current != "" && s.store.Exists(current) && len(profiles) > 0 {
-		choice, choiceErr := trayChoice("Sesión no reconocida", "Claude tiene una sesión activa que no coincide con la copia guardada de "+current+". ¿Quieres actualizar esa copia con la sesión actual? Sí=actualizar, No=dejarla intacta.")
+		choice, choiceErr := trayChoice("Unrecognized session", "Claude has an active session that does not match the saved copy of "+current+". Update that copy with the current session? Yes=update, No=keep it unchanged.")
 		if choiceErr != nil || choice != trayYes {
 			if choiceErr == nil && choice == trayNo {
-				s.setStatus("Sesión activa no reconocida; no se modificó la cuenta guardada")
+				s.setStatus("Unrecognized active session; saved account was not changed")
 			}
 			return
 		}
 		lock, lockErr := acquireOperationLock("operation")
 		if lockErr != nil {
-			s.setStatus("No se pudo actualizar cuenta: " + lockErr.Error())
+			s.setStatus("Could not update account: " + lockErr.Error())
 			return
 		}
 		defer lock.Release()
 		var output bytes.Buffer
 		if err := saveProfileWith(current, s.store, p, io.Writer(&output)); err != nil {
-			s.setStatus("Error actualizando cuenta: " + err.Error())
+			s.setStatus("Account update error: " + err.Error())
 			return
 		}
 		s.loadAccounts()
-		s.setStatus("Cuenta actualizada: " + current)
+		s.setStatus("Account updated: " + current)
 		return
 	}
-	choice, err := trayChoice("Cuenta detectada", "Claude ya tiene una cuenta iniciada que no está guardada en el switcher. ¿Quieres guardarla ahora? Sí=guardar, No=dejarla intacta.")
+	choice, err := trayChoice("Account detected", "Claude already has a signed-in account that is not saved in the Switcher. Save it now? Yes=save, No=keep it unchanged.")
 	if err != nil || choice != trayYes {
 		if err == nil && choice == trayNo {
-			s.setStatus("Cuenta detectada pero no guardada")
+			s.setStatus("Account detected but not saved")
 		}
 		return
 	}
-	name, err := s.promptNewProfileName("Guardar cuenta detectada")
+	name, err := s.promptNewProfileName("Save detected account")
 	if err != nil {
 		return
 	}
 	lock, lockErr := acquireOperationLock("operation")
 	if lockErr != nil {
-		s.setStatus("No se pudo guardar cuenta detectada: " + lockErr.Error())
+		s.setStatus("Could not save detected account: " + lockErr.Error())
 		return
 	}
 	defer lock.Release()
 	if err := s.saveDetectedProfile(name); err != nil {
-		s.setStatus("Error guardando cuenta detectada: " + err.Error())
+		s.setStatus("Detected account save error: " + err.Error())
 		return
 	}
 	s.loadAccounts()
-	s.setStatus("Cuenta detectada y guardada: " + name)
+	s.setStatus("Account detected and saved: " + name)
 }
 
 func (s *trayState) promptNewProfileName(title string) (string, error) {
@@ -595,15 +605,15 @@ func (s *trayState) promptNewProfileName(title string) (string, error) {
 		}
 		name = strings.TrimSpace(name)
 		if name == "" {
-			trayWarning("Nombre obligatorio", "No puedes dejar el nombre vacío.\n\nEscribe un nombre para continuar.")
+			trayWarning("Name required", "The name cannot be empty.\n\nEnter a name to continue.")
 			continue
 		}
 		if !validAddProfileName(name) {
-			trayWarning("Nombre no válido", "Usa un nombre sencillo sin barras ni rutas.")
+			trayWarning("Invalid name", "Use a simple name without slashes or paths.")
 			continue
 		}
 		if s.store.Exists(name) {
-			trayWarning("Nombre ya utilizado", "Ya existe una cuenta guardada con ese nombre.\n\nElige otro nombre.")
+			trayWarning("Name already in use", "A saved account already uses that name.\n\nChoose another name.")
 			continue
 		}
 		return name, nil
@@ -618,7 +628,7 @@ func (s *trayState) prepareCurrentForNewAccount() error {
 	live := platform.CookiesPath(appData)
 	running, _ := platform.Current().IsRunning()
 	if !profile.HasActiveSessionAt(live) && !running {
-		return errors.New("claude no tiene una sesión activa para proteger")
+		return errors.New("Claude has no active session to protect")
 	}
 	matched, _ := s.store.MatchLiveAt(live)
 	if matched != "" {
@@ -638,7 +648,7 @@ func (s *trayState) prepareCurrentForNewAccount() error {
 }
 
 func (s *trayState) nextAutomaticProfileName() string {
-	base := "cuenta-actual"
+	base := "current-account"
 	name := base
 	for index := 2; s.store.Exists(name); index++ {
 		name = base + "-" + strconv.Itoa(index)
@@ -648,7 +658,7 @@ func (s *trayState) nextAutomaticProfileName() string {
 
 func (s *trayState) saveDetectedProfile(name string) error {
 	if s.store.Exists(name) {
-		return errors.New("ese nombre de perfil ya existe")
+		return errors.New("that profile name already exists")
 	}
 	var output bytes.Buffer
 	return saveProfileWith(name, s.store, platform.Current(), io.Writer(&output))
@@ -660,7 +670,7 @@ func (s *trayState) loadAccounts() {
 	switching := s.switching
 	profiles, err := s.store.List()
 	if err != nil {
-		s.setStatus("Error leyendo cuentas: " + err.Error())
+		s.setStatus("Account read error: " + err.Error())
 		return
 	}
 	s.claudeInstalled = platform.Installed()
@@ -689,13 +699,13 @@ func (s *trayState) loadAccounts() {
 		item, ok := s.items[meta.Name]
 		if !ok {
 			name := meta.Name
-			item = s.root.AddSubMenuItem(name, "Cambiar a "+name)
+			item = s.root.AddSubMenuItem(name, "Switch to "+name)
 			s.items[name] = item
 			go s.watchAccount(item, name)
 		}
 		deleteItem, deleteOK := s.deleteItems[meta.Name]
 		if !deleteOK {
-			deleteItem = s.delete.AddSubMenuItem(meta.Name, "Eliminar "+meta.Name)
+			deleteItem = s.delete.AddSubMenuItem(meta.Name, "Delete "+meta.Name)
 			s.deleteItems[meta.Name] = deleteItem
 			go s.watchDeleteAccount(deleteItem, meta.Name)
 		}
@@ -727,29 +737,29 @@ func (s *trayState) loadAccounts() {
 		}
 	}
 	if !s.claudeInstalled {
-		s.setStatus("Claude Desktop no está instalado o no fue detectado")
+		s.setStatus("Claude Desktop is not installed or was not detected")
 	}
 }
 
 func (s *trayState) watchAccount(item *systray.MenuItem, name string) {
 	for range item.ClickedCh {
 		if !s.beginSwitch() {
-			s.setStatus("Termina o cancela el registro antes de cambiar")
+			s.setStatus("Finish or cancel setup before switching")
 			continue
 		}
-		s.setStatus("Cambiando a " + name + "...")
+		s.setStatus("Switching to " + name + "...")
 		go func() {
 			err := switchProfileFromTray(name, s.store)
 			s.endSwitch()
 			if err != nil {
 				if strings.Contains(err.Error(), "account switch cancelled") {
-					s.setStatus("Cambio cancelado; la sesión anterior se conservó")
+					s.setStatus("Switch cancelled; previous session was preserved")
 					return
 				}
-				s.setStatus("Error cambiando cuenta: " + err.Error())
+				s.setStatus("Account switch error: " + err.Error())
 				return
 			}
-			s.setStatus("Cuenta activa: " + name)
+			s.setStatus("Active account: " + name)
 			s.loadAccounts()
 		}()
 	}
@@ -774,8 +784,8 @@ func switchProfileFromTray(name string, store *profile.Store) error {
 
 func confirmSessionUpdate(current, target string) bool {
 	choice, err := trayChoice(
-		"Cuenta diferente detectada",
-		"La cuenta abierta no coincide con \""+current+"\".\n\n¿Quieres guardarla como \""+current+"\" y cambiar a \""+target+"\"?\n\nSí: guardar y cambiar.\nNo o Cancelar: no modificar nada.",
+		"Different account detected",
+		"The open account does not match \""+current+"\".\n\nSave it as \""+current+"\" and switch to \""+target+"\"?\n\nYes: save and switch.\nNo or Cancel: make no changes.",
 	)
 	return err == nil && choice == trayYes
 }
@@ -783,29 +793,29 @@ func confirmSessionUpdate(current, target string) bool {
 func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 	for range item.ClickedCh {
 		if s.switchingSnapshot() {
-			s.setStatus("Espera a que termine el cambio de cuenta")
+			s.setStatus("Wait for the account switch to finish")
 			continue
 		}
 		if s.workflowSnapshot() != nil {
-			s.setStatus("Termina o cancela el registro antes de eliminar una cuenta")
+			s.setStatus("Finish or cancel setup before deleting an account")
 			continue
 		}
 		active, liveVerified, activeErr := s.deleteAccountIsActive(name)
 		if activeErr != nil {
 			message := s.deleteVerificationMessage(name, activeErr)
-			trayWarning("No se puede comprobar la cuenta activa", message)
-			s.setStatus("No se eliminó " + name + ": no se pudo verificar la cuenta activa")
+			trayWarning("Unable to verify active account", message)
+			s.setStatus(name + " was not deleted: active account could not be verified")
 			continue
 		}
 		profiles, profilesErr := s.store.List()
 		onlyActive := active && profilesErr == nil && len(profiles) == 1
 		if active && !onlyActive {
-			message := "No se eliminó \"" + name + "\" porque está marcada como la cuenta activa.\n\nCambia primero a otra cuenta y vuelve a intentarlo."
+			message := "\"" + name + "\" was not deleted because it is marked as the active account.\n\nSwitch to another account and try again."
 			if liveVerified {
-				message = "No se eliminó \"" + name + "\" porque es la cuenta que está abierta actualmente en Claude Desktop.\n\nCambia primero a otra cuenta y vuelve a intentarlo."
+				message = "\"" + name + "\" was not deleted because it is currently open in Claude Desktop.\n\nSwitch to another account and try again."
 			}
-			trayWarning("No se puede eliminar la cuenta activa", message)
-			s.setStatus("No se eliminó " + name + ": es la cuenta activa")
+			trayWarning("The active account cannot be deleted", message)
+			s.setStatus(name + " was not deleted: it is the active account")
 			continue
 		}
 		confirmed, err := trayDeleteConfirm(name, onlyActive)
@@ -814,7 +824,7 @@ func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 		}
 		item.Disable()
 		s.delete.Disable()
-		s.setStatus("Eliminando cuenta: " + name)
+		s.setStatus("Deleting account: " + name)
 		go func() {
 			lock, lockErr := acquireOperationLock("operation")
 			if lockErr == nil {
@@ -824,12 +834,12 @@ func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 			if lockErr != nil {
 				item.Enable()
 				s.delete.Enable()
-				s.setStatus("Error eliminando cuenta: " + lockErr.Error())
+				s.setStatus("Account deletion error: " + lockErr.Error())
 				return
 			}
 			s.removeDeletedAccount(name)
 			s.loadAccounts()
-			s.setStatus("Cuenta eliminada: " + name)
+			s.setStatus("Account deleted: " + name)
 		}()
 	}
 }
@@ -888,14 +898,14 @@ func (s *trayState) deleteVerificationMessage(name string, err error) string {
 	current, _ := s.store.Current()
 	if errors.Is(err, errDeleteSessionUnknown) {
 		if current != "" {
-			return "Windows no pudo comprobar la sesión actual de Claude.\n\n\"" + current + "\" está marcada como la cuenta activa. No se eliminó \"" + name + "\".\n\nCierra Claude Desktop o vuelve a intentarlo."
+			return "Windows could not verify the current Claude session.\n\n\"" + current + "\" is marked as the active account. \"" + name + "\" was not deleted.\n\nClose Claude Desktop or try again."
 		}
-		return "Windows no pudo comprobar la sesión actual de Claude.\n\nNo se eliminó \"" + name + "\". Cierra Claude Desktop o vuelve a intentarlo."
+		return "Windows could not verify the current Claude session.\n\n\"" + name + "\" was not deleted. Close Claude Desktop or try again."
 	}
 	if errors.Is(err, errDeleteSessionUnrecognized) {
-		return "Claude tiene una sesión abierta que no coincide con una cuenta guardada.\n\nNo se eliminó \"" + name + "\" para proteger tus cuentas. Guarda o actualiza primero la sesión actual."
+		return "Claude has an open session that does not match a saved account.\n\n\"" + name + "\" was not deleted to protect your accounts. Save or update the current session first."
 	}
-	return "No se pudo comprobar la cuenta activa.\n\nNo se eliminó \"" + name + "\".\n\n" + err.Error()
+	return "The active account could not be verified.\n\n\"" + name + "\" was not deleted.\n\n" + err.Error()
 }
 
 func (s *trayState) setWorkflow(workflow *addWorkflow) {

@@ -46,6 +46,8 @@ type Meta struct {
 	CookieDigest       string    `json:"cookie_digest,omitempty"`
 	SessionDigest      string    `json:"session_digest,omitempty"`
 	AccountFingerprint string    `json:"account_fingerprint,omitempty"`
+	AccountUUIDHashes  []string  `json:"account_uuid_hashes,omitempty"`
+	IdentityHashes     []string  `json:"identity_hashes,omitempty"`
 }
 
 type Store struct {
@@ -146,7 +148,8 @@ func (s *Store) CheckpointAt(name, appDataPath, live string) error {
 		return err
 	}
 	evidence, _ := readCookieEvidence(stagedCookies)
-	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: evidence.sessionDigest, AccountFingerprint: evidence.accountFingerprint}
+	identity := localIdentityAt(stage)
+	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: evidence.sessionDigest, AccountFingerprint: evidence.accountFingerprint, AccountUUIDHashes: identity.uuidHashes, IdentityHashes: identity.emailHashes}
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
 		meta.LastUsed = existing.LastUsed
@@ -154,6 +157,12 @@ func (s *Store) CheckpointAt(name, appDataPath, live string) error {
 		meta.Plan = existing.Plan
 		if meta.SessionDigest == "" {
 			meta.SessionDigest = existing.SessionDigest
+		}
+		if len(meta.IdentityHashes) == 0 {
+			meta.IdentityHashes = existing.IdentityHashes
+		}
+		if len(meta.AccountUUIDHashes) == 0 {
+			meta.AccountUUIDHashes = existing.AccountUUIDHashes
 		}
 	}
 	if err := writeJSONAtomic(filepath.Join(stage, metaFile), meta); err != nil {
@@ -415,6 +424,39 @@ func (s *Store) MatchLive(appDataPath string) (string, Health) {
 }
 
 func (s *Store) MatchLiveAt(live string) (string, Health) {
+	for attempt := 0; attempt < 3; attempt++ {
+		name, health := s.matchLiveAt(live)
+		if health != HealthUnknown || attempt == 2 {
+			return name, health
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return "", HealthUnknown
+}
+
+// IdentityEmailChangedAt reports a stable internal identity with a different
+// email identity. It is intentionally separate from MatchLiveAt so callers can
+// ask for confirmation before replacing a saved snapshot.
+func (s *Store) IdentityEmailChangedAt(name, live string) bool {
+	meta, err := s.loadMeta(name)
+	if err != nil {
+		return false
+	}
+	liveIdentity := localIdentityAt(filepath.Dir(live))
+	savedIdentity := localIdentity{uuidHashes: meta.AccountUUIDHashes, emailHashes: meta.IdentityHashes}
+	if len(savedIdentity.uuidHashes) == 0 && len(savedIdentity.emailHashes) == 0 {
+		savedIdentity = localIdentityAt(s.profileDir(name))
+	}
+	if identityOverlapCount(liveIdentity.uuidHashes, savedIdentity.uuidHashes) < 2 {
+		return false
+	}
+	if len(liveIdentity.emailHashes) == 0 || len(savedIdentity.emailHashes) == 0 {
+		return false
+	}
+	return identityOverlapCount(liveIdentity.emailHashes, savedIdentity.emailHashes) == 0
+}
+
+func (s *Store) matchLiveAt(live string) (string, Health) {
 	inspection := InspectCookies(live, s.now())
 	if inspection.Health != HealthUsable {
 		return "", inspection.Health
@@ -424,21 +466,20 @@ func (s *Store) MatchLiveAt(live string) (string, Health) {
 		return "", HealthUnknown
 	}
 	liveEvidence, _ := readCookieEvidence(live)
+	liveIdentity := localIdentityAt(filepath.Dir(live))
 	profiles, err := s.List()
 	if err != nil {
 		return "", HealthUnknown
 	}
-	identityMatches := make([]string, 0, 1)
+	identityMatch := ""
+	identityScore := 0
+	identityTied := false
 	for _, meta := range profiles {
 		profileSessionDigest := meta.SessionDigest
-		profileFingerprint := meta.AccountFingerprint
-		if profileSessionDigest == "" || profileFingerprint == "" {
+		if profileSessionDigest == "" {
 			evidence, _ := readCookieEvidence(filepath.Join(s.profileDir(meta.Name), cookiesFile))
 			if profileSessionDigest == "" {
 				profileSessionDigest = evidence.sessionDigest
-			}
-			if profileFingerprint == "" {
-				profileFingerprint = evidence.accountFingerprint
 			}
 		}
 		if liveEvidence.sessionDigest != "" && profileSessionDigest == liveEvidence.sessionDigest && s.Inspect(meta.Name).Health == HealthUsable {
@@ -451,12 +492,24 @@ func (s *Store) MatchLiveAt(live string) (string, Health) {
 		if profileDigest == digest && s.Inspect(meta.Name).Health == HealthUsable {
 			return meta.Name, HealthUsable
 		}
-		if liveEvidence.accountFingerprint != "" && profileFingerprint == liveEvidence.accountFingerprint && s.Inspect(meta.Name).Health == HealthUsable {
-			identityMatches = append(identityMatches, meta.Name)
+		profileIdentity := localIdentity{uuidHashes: meta.AccountUUIDHashes, emailHashes: meta.IdentityHashes}
+		if len(profileIdentity.uuidHashes) == 0 && len(profileIdentity.emailHashes) == 0 {
+			profileIdentity = localIdentityAt(s.profileDir(meta.Name))
+		}
+		score := identityMatchScore(liveIdentity, profileIdentity)
+		if score > 0 && s.Inspect(meta.Name).Health == HealthUsable {
+			switch {
+			case score > identityScore:
+				identityMatch = meta.Name
+				identityScore = score
+				identityTied = false
+			case score == identityScore:
+				identityTied = true
+			}
 		}
 	}
-	if len(identityMatches) == 1 {
-		return identityMatches[0], HealthUsable
+	if identityMatch != "" && !identityTied {
+		return identityMatch, HealthUsable
 	}
 	return "", HealthUsable
 }

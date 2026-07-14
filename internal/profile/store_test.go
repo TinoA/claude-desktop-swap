@@ -355,10 +355,10 @@ func TestMatchLiveDoesNotTrustStaleCurrent(t *testing.T) {
 	}
 }
 
-func TestMatchLiveRecognizesRenewedSessionByAccountFingerprint(t *testing.T) {
+func TestMatchLiveRecognizesRenewedSessionByLocalIdentity(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "old-session")
-	setAccountIdentity(t, filepath.Join(saved, cookiesFile), "org-a", "route-a")
+	setLocalIdentity(t, saved, "person@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
 	if err := store.Checkpoint("personal", saved); err != nil {
 		t.Fatal(err)
 	}
@@ -366,33 +366,76 @@ func TestMatchLiveRecognizesRenewedSessionByAccountFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(meta.AccountFingerprint) != sha256.Size*2 || strings.Contains(meta.AccountFingerprint, "org-a") || strings.Contains(meta.AccountFingerprint, "route-a") {
-		t.Fatalf("unsafe account fingerprint metadata: %q", meta.AccountFingerprint)
+	if len(meta.AccountUUIDHashes) != 2 || len(meta.IdentityHashes) != 1 || len(meta.AccountUUIDHashes[0]) != sha256.Size*2 || strings.Contains(meta.IdentityHashes[0], "person") {
+		t.Fatalf("unsafe identity hashes: %v/%v", meta.AccountUUIDHashes, meta.IdentityHashes)
 	}
 	live := syntheticAppData(t, "renewed-session")
-	setAccountIdentity(t, filepath.Join(live, cookiesFile), "org-a", "route-a")
+	setLocalIdentity(t, live, "renamed@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
 
 	if name, health := store.MatchLive(live); name != "personal" || health != HealthUsable {
 		t.Fatalf("match = %q/%s, want personal/usable", name, health)
 	}
 	differentAccount := syntheticAppData(t, "different-session")
-	setAccountIdentity(t, filepath.Join(differentAccount, cookiesFile), "org-a", "route-b")
+	setLocalIdentity(t, differentAccount, "other@example.test", "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333")
 	if name, health := store.MatchLive(differentAccount); name != "" || health != HealthUsable {
 		t.Fatalf("match = %q/%s, want different usable account", name, health)
 	}
 }
 
-func TestMatchLiveRejectsAmbiguousAccountFingerprint(t *testing.T) {
+func TestIdentityEmailChangedAtRequiresStableIdentity(t *testing.T) {
+	store := newTestStore(t)
+	saved := syntheticAppData(t, "saved")
+	setLocalIdentity(t, saved, "old@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if err := store.Checkpoint("personal", saved); err != nil {
+		t.Fatal(err)
+	}
+	live := syntheticAppData(t, "live")
+	setLocalIdentity(t, live, "new@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if !store.IdentityEmailChangedAt("personal", filepath.Join(live, cookiesFile)) {
+		t.Fatal("email change was not detected for the same internal identity")
+	}
+
+	other := syntheticAppData(t, "other")
+	setLocalIdentity(t, other, "new@example.test", "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333")
+	if store.IdentityEmailChangedAt("personal", filepath.Join(other, cookiesFile)) {
+		t.Fatal("email change was reported without the stable composite identity")
+	}
+}
+
+func TestMatchLiveReadsIdentityFromLegacyProfileSnapshot(t *testing.T) {
+	store := newTestStore(t)
+	saved := syntheticAppData(t, "old-session")
+	setLocalIdentity(t, saved, "person@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if err := store.Checkpoint("personal", saved); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.AccountUUIDHashes = nil
+	meta.IdentityHashes = nil
+	if err := store.saveMeta("personal", meta); err != nil {
+		t.Fatal(err)
+	}
+	live := syntheticAppData(t, "renewed-session")
+	setLocalIdentity(t, live, "person@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if name, health := store.MatchLive(live); name != "personal" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want personal/usable", name, health)
+	}
+}
+
+func TestMatchLiveRejectsAmbiguousLocalIdentity(t *testing.T) {
 	store := newTestStore(t)
 	for _, name := range []string{"first", "second"} {
 		appData := syntheticAppData(t, name+"-session")
-		setAccountIdentity(t, filepath.Join(appData, cookiesFile), "shared-org", "shared-route")
+		setLocalIdentity(t, appData, "shared@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
 		if err := store.Checkpoint(name, appData); err != nil {
 			t.Fatal(err)
 		}
 	}
 	live := syntheticAppData(t, "renewed-session")
-	setAccountIdentity(t, filepath.Join(live, cookiesFile), "shared-org", "shared-route")
+	setLocalIdentity(t, live, "shared@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
 
 	if name, health := store.MatchLive(live); name != "" || health != HealthUsable {
 		t.Fatalf("match = %q/%s, want ambiguous usable session", name, health)
@@ -463,6 +506,12 @@ func setAccountIdentity(t *testing.T, path, org, routing string) {
 	for name, value := range map[string]string{"lastActiveOrg": org, "routingHint": routing} {
 		mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', ?, 0, '', ?)`, name, []byte(value))
 	}
+}
+
+func setLocalIdentity(t *testing.T, appData, email string, uuids ...string) {
+	t.Helper()
+	content := "account_profile email_address=" + email + " accountUuid=" + strings.Join(uuids, " organizationUuid=")
+	mustWriteFile(t, filepath.Join(appData, indexedDBDir, "https_claude.ai_0.indexeddb.blob", "1", "00", "1"), content)
 }
 
 func mustWriteFile(t *testing.T, path, content string) {

@@ -9,19 +9,19 @@ type switchOverlay struct {
 }
 
 func startSwitchOverlay() *switchOverlay {
-	return startNativeOverlay("Cambiando cuenta...", false)
+	return startNativeOverlay("Switching account...", false)
 }
 
 func startAddPreparationOverlay() *switchOverlay {
-	return startNativeOverlay("Preparando nueva cuenta...", false)
+	return startNativeOverlay("Preparing new account...", false)
 }
 
 func startAddSuccessOverlay() *switchOverlay {
-	return startNativeOverlay("Cuenta agregada", true)
+	return startNativeOverlay("Account added", true)
 }
 
 func startBackupPreparationOverlay() *switchOverlay {
-	return startNativeOverlay("Preparando backup...", false)
+	return startNativeOverlay("Preparing backup...", false)
 }
 
 func (o *switchOverlay) Close() {

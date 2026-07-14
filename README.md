@@ -1,145 +1,132 @@
-# Windows Claude Swap
+<p align="center">
+  <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Windows Claude Swap logo" width="200">
+</p>
+
+<h1 align="center">Windows Claude Swap</h1>
 
 <p align="center">
-  <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Windows Claude Swap" width="180">
+  Switch between Claude Desktop accounts from the Windows system tray.<br>
+  No repeated sign-outs. No command line required.
 </p>
 
 <p align="center">
-  Cambia entre varias cuentas de Claude Desktop desde el icono del tray de Windows.
+  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest/download/Windows-Claude-Swap-Setup-amd64.exe">
+    <img src="https://img.shields.io/badge/Download_for_Windows_x64-2F2D2A?style=for-the-badge&logo=windows11&logoColor=white" alt="Download for Windows x64">
+  </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest">Descargar para Windows</a>
+  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest">All downloads</a>
   ·
-  <a href="https://github.com/TinoA/claude-desktop-swap/issues">Reportar un problema</a>
+  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest/download/Windows-Claude-Swap-Setup-arm64.exe">Windows ARM64</a>
+  ·
+  <a href="https://github.com/TinoA/claude-desktop-swap/issues">Report a problem</a>
 </p>
 
-Windows Claude Swap está pensado para algo muy concreto: guardar tus sesiones
-de Claude Desktop y cambiar de cuenta sin tener que cerrar sesión manualmente
-cada vez.
+<p align="center">
+  <img src="https://img.shields.io/github/v/release/TinoA/claude-desktop-swap?label=latest" alt="Latest release">
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white" alt="Windows 10 and 11">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
 
-> Importante: esta aplicación es para **Claude Desktop en Windows**. No cambia
-> ni cierra procesos de Claude Code.
+> [!IMPORTANT]
+> Windows Claude Swap is made for **Claude Desktop on Windows**. It does not manage or close Claude Code.
 
-## ¿Qué puedes hacer?
+## Install in a minute
 
-- Guardar varias cuentas con nombres fáciles de reconocer.
-- Cambiar de cuenta desde el tray con un clic.
-- Agregar una cuenta nueva con un inicio de sesión guiado.
-- Guardar automáticamente una sesión renovada al cerrar Claude Desktop.
-- Exportar e importar backups con contraseña o protegidos por Windows.
-- Eliminar una cuenta guardada sin tocar las demás.
-- Recibir avisos cuando exista una nueva versión publicada en GitHub.
-- Usar overlays y avisos nativos de Windows durante las operaciones.
+1. Download the **Windows x64 installer** using the button above. If your Windows device uses an ARM processor, choose **Windows ARM64** instead.
+2. Open `Windows-Claude-Swap-Setup-amd64.exe`.
+3. Complete the installer and launch **Windows Claude Swap**.
+4. Find its icon in the Windows notification area. It may be inside the hidden-icons menu (`^`).
 
-## Instalación rápida
+The app installs for your Windows user and normally does not require administrator access. The installer can start it with Windows and adds a standard uninstaller.
 
-1. Descarga el instalador desde la
-   [última versión publicada](https://github.com/TinoA/claude-desktop-swap/releases/latest).
-2. Elige el archivo adecuado:
+## What it does
 
-   - `Windows-Claude-Swap-Setup-amd64.exe`: Windows normal de 64 bits.
-   - `Windows-Claude-Swap-Setup-arm64.exe`: Windows sobre ARM.
+- Keeps multiple Claude Desktop accounts available under names you recognize.
+- Switches accounts from a small system-tray menu.
+- Guides you through adding another account and saves it automatically after sign-in.
+- Safely closes and reopens Claude Desktop when a switch requires it.
+- Saves a renewed session when Claude Desktop closes normally.
+- Imports and exports complete account backups.
+- Lets you remove one saved account without affecting the others.
+- Shows a tray notification when a newer release is available.
 
-3. Ejecuta el instalador.
-4. Abre el icono de Windows Claude Swap en el área de notificaciones.
+## Everyday use
 
-La instalación es por usuario y normalmente no necesita permisos de
-administrador. También crea un desinstalador normal y puede iniciar el tray con
-Windows.
+### Switch accounts
 
-## Cómo usarlo
+Right-click the tray icon, open **Accounts**, and select the account you want. Windows Claude Swap prepares the saved session and opens Claude Desktop again with that account.
 
-### Cambiar de cuenta
+### Add an account
 
-Abre el menú del icono y entra en `Cuentas`. Selecciona el perfil que quieres
-usar. El programa cerrará Claude Desktop de forma controlada, cambiará la
-sesión y lo abrirá de nuevo.
+Choose **Add account...**, give the profile a recognizable name, and sign in through Claude Desktop. The new account is saved automatically and appears in the account list.
 
-### Agregar una cuenta
+### Delete a saved account
 
-Selecciona `Agregar cuenta...`, escribe un nombre para reconocerla y completa
-el inicio de sesión en Claude Desktop. Cuando la sesión esté lista, el perfil se
-guarda y aparece automáticamente en la lista.
+Choose **Delete account...**, select a profile, and confirm. This removes only the Switcher's local copy. It does **not** delete the Anthropic account, and other saved accounts remain untouched.
 
-### Eliminar una cuenta
+### Back up your accounts
 
-Selecciona `Eliminar cuenta...`, elige el perfil y confirma. Se eliminan sus
-archivos locales, pero se conservan las demás cuentas. La cuenta que está
-activa queda protegida mientras existan otros perfiles.
+Open **Backup** and choose:
 
-### Hacer un backup
+- **Password-protected...** for a portable encrypted backup protected by a password you choose.
+- **Without password...** for a backup protected automatically with your current Windows account.
 
-Entra en `Backup` y elige una opción:
+Choose **Import backup** to restore a file. The app detects the protection type automatically and asks for a password only when one is required.
 
-- `Con contraseña`: crea un archivo que puedes guardar o mover como archivo.
-- `Sin contraseña`: lo protege usando tu usuario y equipo de Windows.
+For a complete backup, Claude Desktop may briefly close while the active profile is refreshed. If the session cannot be verified safely, the backup stops without replacing saved account data.
 
-Para importar solo debes elegir `Importar backup`; el programa detecta
-automáticamente si necesita contraseña.
+## Your sessions and chats
 
-Para un backup completo, Claude Desktop se detiene de forma controlada, se
-actualiza el perfil activo y vuelve a iniciarse. Si la sesión no puede
-comprobarse correctamente, el backup se cancela para evitar guardar datos
-incompletos.
+Windows Claude Swap stores the local Claude Desktop data needed to reopen each account, including encrypted cookies and browser storage. Cookie values are copied in their encrypted form and are never decrypted, displayed, or written to logs.
 
-## ¿Qué se guarda?
+Chats are not copied by this app. Conversation history belongs to each Claude account and is loaded by Claude Desktop from Anthropic when that account is active.
 
-Cada perfil conserva una copia de los datos necesarios para recuperar la sesión
-en el mismo equipo:
+Claude or Anthropic may still request sign-in or device verification after a session expires, is revoked, or triggers a security check. No local application can guarantee that an external service will never request verification again.
 
-- Cookies de Claude Desktop, incluyendo sus valores cifrados.
-- Local Storage, IndexedDB y Session Storage.
-- Estado del dispositivo y metadatos de la cuenta.
+## Backups and reinstalling
 
-Los valores de cookies nunca se descifran, muestran ni escriben en logs.
-
-La sincronización de chats depende de la cuenta de Claude. Windows Claude Swap
-no copia conversaciones: al cambiar a una cuenta, Claude muestra el historial
-que pertenece a esa cuenta en sus servidores.
-
-## Verificación y límites importantes
-
-Una sesión puede pedir verificación otra vez si Claude la expira, la revoca,
-detecta un evento de seguridad o cambia sus requisitos. Ninguna aplicación local
-puede garantizar que Anthropic nunca vuelva a solicitarla.
-
-Los backups están pensados principalmente para recuperar cuentas en el mismo
-equipo. Las cookies de Chromium están protegidas por la clave de Windows, por
-lo que importar un backup en otro ordenador puede requerir iniciar sesión otra
-vez.
-
-## Ubicación de los perfiles
-
-Los perfiles se guardan en:
+Uninstalling Windows Claude Swap keeps your saved profiles by default, so reinstalling the app does not normally remove your accounts. Profiles are stored in:
 
 ```text
-%USERPROFILE%\.claude-swap\profiles\<nombre>\
+%USERPROFILE%\.claude-swap\profiles\<name>\
 ```
 
-Desinstalar Windows Claude Swap conserva los perfiles y backups. Esto permite
-reinstalar la aplicación sin perder las cuentas guardadas. Si quieres borrar
-todo manualmente, elimina también `%USERPROFILE%\.claude-swap`.
+To start completely fresh, uninstall the app and then manually remove `%USERPROFILE%\.claude-swap`.
 
-No subas esa carpeta ni tus backups a GitHub: contienen sesiones protegidas y
-datos privados.
+> [!WARNING]
+> Never upload the `.claude-swap` folder or backup files to GitHub. They contain private session data, even though sensitive values remain protected.
 
-## Si Claude Desktop no abre
+Backups protected by your Windows account are intended for the same user and computer. Password-protected backups are portable, but Claude may still require a new sign-in on another device because Chromium session data can depend on Windows security keys and device trust.
 
-Prueba este orden:
+## If Claude Desktop does not open
 
-1. Comprueba que Claude Desktop esté instalado y actualizado.
-2. Cierra cualquier instancia bloqueada de Claude Desktop.
-3. Desde el tray, cambia a una cuenta guardada válida.
-4. Si Claude pidió verificar la cuenta, completa el inicio de sesión y vuelve a
-   cerrar Claude normalmente para que la sesión renovada se guarde.
+1. Make sure Claude Desktop is installed and up to date.
+2. Close any unresponsive Claude Desktop window or process.
+3. Use the tray menu to switch to a known working account.
+4. If Claude requests verification, complete it and close Claude Desktop normally so the renewed session can be saved.
 
-Windows Claude Swap detecta instalaciones normales, Squirrel, MSIX y algunas
-instalaciones portables de Claude Desktop.
+The app detects common Claude Desktop installations, including standard, Squirrel, MSIX, and supported portable layouts.
 
-## Ejecutar desde el código
+---
 
-Necesitas Go y Windows. Desde PowerShell:
+## Technical details
+
+Windows Claude Swap is a Go application with a native Windows tray interface. Account switching works by stopping Claude Desktop safely, checkpointing the current local session, restoring the selected profile, and starting Claude Desktop again.
+
+Each profile can include:
+
+- Claude Desktop's Chromium Cookies database, with encrypted values kept intact.
+- Local Storage and its device-trust state.
+- IndexedDB and Session Storage.
+- Account identity hashes and profile metadata used for safer matching.
+
+The app never decrypts Chromium cookie values. Profiles are isolated under `.claude-swap`, and tests use temporary data rather than a live Claude Desktop profile.
+
+### Build from source
+
+Requirements: Windows and Go as declared in [`go.mod`](go.mod).
 
 ```powershell
 go test ./...
@@ -148,28 +135,14 @@ go build -trimpath -o claude-desktop-swap.exe .
 .\claude-desktop-swap.exe tray
 ```
 
-El ejecutable creado localmente es independiente del instalador publicado.
-Compilar no desinstala Claude Desktop ni elimina perfiles.
+A locally compiled executable is separate from the installed release. Building it does not uninstall Claude Desktop or remove saved profiles.
 
-## Publicación y actualizaciones
+### Releases and updates
 
-Este repositorio es el fork de
-[`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
-La versión mantenida para Windows se publica en
-[`TinoA/claude-desktop-swap`](https://github.com/TinoA/claude-desktop-swap).
+GitHub Actions tests the project and publishes versioned Windows installers for `amd64` and `arm64`, CLI archives, and checksums. The tray checks this repository for new releases and links to the latest download; updates are not installed silently.
 
-Las versiones se construyen mediante GitHub Actions y publican:
+This Windows-focused project is maintained at [`TinoA/claude-desktop-swap`](https://github.com/TinoA/claude-desktop-swap) and is based on [`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
 
-- Archivos CLI para los sistemas compatibles.
-- Instaladores Windows amd64 y arm64.
-- Checksums para verificar las descargas.
+## License
 
-El programa consulta las actualizaciones únicamente en el repositorio de este
-fork. Los releases no incluyen cookies, tokens, perfiles ni backups personales.
-
-## Licencia
-
-MIT. Consulta [LICENSE](LICENSE).
-
-Este proyecto está basado en y reconoce el trabajo de
-[`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
+Released under the [MIT License](LICENSE).

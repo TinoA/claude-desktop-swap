@@ -204,23 +204,23 @@ func newDeleteBrush(color uint32) uintptr {
 }
 
 func createDeleteControls(dialog uintptr, name string, onlyActive bool) {
-	createDeleteControl("STATIC", "Confirmar eliminación", 35, 28, 490, 32, dialog, 0)
+	createDeleteControl("STATIC", "Confirm deletion", 35, 28, 490, 32, dialog, 0)
 	if onlyActive {
-		createDeleteControl("STATIC", "Es la única cuenta guardada y está activa.", 35, 82, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "Claude Desktop seguirá abierto con esta sesión.", 35, 108, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "El switcher dejará de guardar esta cuenta.", 35, 134, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "La cuenta de Anthropic no se elimina.", 35, 160, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "This is the only saved account and it is active.", 35, 82, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "Claude Desktop will remain open with this session.", 35, 108, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "The switcher will stop saving this account.", 35, 134, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "The Anthropic account will not be deleted.", 35, 160, 490, 24, dialog, 0)
 	} else {
-		createDeleteControl("STATIC", "Se eliminarán perfil, token cifrado y datos locales de:", 35, 82, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "The profile, encrypted token, and local data will be deleted for:", 35, 82, 490, 24, dialog, 0)
 		createDeleteControl("STATIC", name, 35, 108, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "La cuenta de Anthropic no se elimina.", 35, 142, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "Las demás cuentas se conservarán.", 35, 166, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "The Anthropic account will not be deleted.", 35, 142, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "Other accounts will be kept.", 35, 166, 490, 24, dialog, 0)
 	}
 	if onlyActive {
 		createDeleteControl("STATIC", name, 35, 186, 490, 24, dialog, 0)
 	}
-	createDeleteControl("BUTTON", "Eliminar", 300, 210, 110, 32, dialog, deleteIDConfirm)
-	createDeleteControl("BUTTON", "Cancelar", 420, 210, 110, 32, dialog, deleteIDCancel)
+	createDeleteControl("BUTTON", "Delete", 300, 210, 110, 32, dialog, deleteIDConfirm)
+	createDeleteControl("BUTTON", "Cancel", 420, 210, 110, 32, dialog, deleteIDCancel)
 }
 
 func createDeleteControl(className, text string, x, y, width, height int, parent uintptr, id uintptr) uintptr {
