@@ -93,7 +93,7 @@ Uninstalling Windows Claude Swap keeps your saved profiles by default, so reinst
 To start completely fresh, uninstall the app and then manually remove `%USERPROFILE%\.claude-swap`.
 
 > [!WARNING]
-> Never upload the `.claude-swap` folder or backup files to GitHub. They contain private session data, even though sensitive values remain protected.
+> Never share your `.claude-swap` folder or backup files publicly. They contain private Claude Desktop session data.
 
 Backups protected by your Windows account are intended for the same user and computer. Password-protected backups are portable, but Claude may still require a new sign-in on another device because Chromium session data can depend on Windows security keys and device trust.
 
