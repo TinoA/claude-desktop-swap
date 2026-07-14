@@ -35,16 +35,17 @@ const (
 )
 
 type Meta struct {
-	Name           string    `json:"name"`
-	CreatedAt      time.Time `json:"created_at"`
-	LastUsed       time.Time `json:"last_used,omitempty"`
-	Email          string    `json:"email,omitempty"`
-	Plan           string    `json:"plan,omitempty"`
-	FormatVersion  int       `json:"format_version,omitempty"`
-	SavedAt        time.Time `json:"saved_at,omitempty"`
-	ObservedHealth Health    `json:"observed_health,omitempty"`
-	CookieDigest   string    `json:"cookie_digest,omitempty"`
-	SessionDigest  string    `json:"session_digest,omitempty"`
+	Name               string    `json:"name"`
+	CreatedAt          time.Time `json:"created_at"`
+	LastUsed           time.Time `json:"last_used,omitempty"`
+	Email              string    `json:"email,omitempty"`
+	Plan               string    `json:"plan,omitempty"`
+	FormatVersion      int       `json:"format_version,omitempty"`
+	SavedAt            time.Time `json:"saved_at,omitempty"`
+	ObservedHealth     Health    `json:"observed_health,omitempty"`
+	CookieDigest       string    `json:"cookie_digest,omitempty"`
+	SessionDigest      string    `json:"session_digest,omitempty"`
+	AccountFingerprint string    `json:"account_fingerprint,omitempty"`
 }
 
 type Store struct {
@@ -144,8 +145,8 @@ func (s *Store) CheckpointAt(name, appDataPath, live string) error {
 	if err != nil {
 		return err
 	}
-	sessionDigest, _ := SessionDigest(stagedCookies)
-	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: sessionDigest}
+	evidence, _ := readCookieEvidence(stagedCookies)
+	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: evidence.sessionDigest, AccountFingerprint: evidence.accountFingerprint}
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
 		meta.LastUsed = existing.LastUsed
@@ -422,17 +423,25 @@ func (s *Store) MatchLiveAt(live string) (string, Health) {
 	if err != nil {
 		return "", HealthUnknown
 	}
-	liveSessionDigest, _ := SessionDigest(live)
+	liveEvidence, _ := readCookieEvidence(live)
 	profiles, err := s.List()
 	if err != nil {
 		return "", HealthUnknown
 	}
+	identityMatches := make([]string, 0, 1)
 	for _, meta := range profiles {
 		profileSessionDigest := meta.SessionDigest
-		if profileSessionDigest == "" {
-			profileSessionDigest, _ = SessionDigest(filepath.Join(s.profileDir(meta.Name), cookiesFile))
+		profileFingerprint := meta.AccountFingerprint
+		if profileSessionDigest == "" || profileFingerprint == "" {
+			evidence, _ := readCookieEvidence(filepath.Join(s.profileDir(meta.Name), cookiesFile))
+			if profileSessionDigest == "" {
+				profileSessionDigest = evidence.sessionDigest
+			}
+			if profileFingerprint == "" {
+				profileFingerprint = evidence.accountFingerprint
+			}
 		}
-		if liveSessionDigest != "" && profileSessionDigest != "" && profileSessionDigest == liveSessionDigest && s.Inspect(meta.Name).Health == HealthUsable {
+		if liveEvidence.sessionDigest != "" && profileSessionDigest == liveEvidence.sessionDigest && s.Inspect(meta.Name).Health == HealthUsable {
 			return meta.Name, HealthUsable
 		}
 		profileDigest := meta.CookieDigest
@@ -442,6 +451,12 @@ func (s *Store) MatchLiveAt(live string) (string, Health) {
 		if profileDigest == digest && s.Inspect(meta.Name).Health == HealthUsable {
 			return meta.Name, HealthUsable
 		}
+		if liveEvidence.accountFingerprint != "" && profileFingerprint == liveEvidence.accountFingerprint && s.Inspect(meta.Name).Health == HealthUsable {
+			identityMatches = append(identityMatches, meta.Name)
+		}
+	}
+	if len(identityMatches) == 1 {
+		return identityMatches[0], HealthUsable
 	}
 	return "", HealthUsable
 }

@@ -126,6 +126,7 @@ func (s *trayState) ready() {
 	}()
 	go s.detectInitialLive()
 	go s.autoRefresh()
+	go s.monitorClaudeClose()
 	go s.monitorUpdates()
 }
 
@@ -372,6 +373,60 @@ func (s *trayState) autoRefresh() {
 		if s.workflowSnapshot() == nil && !s.switchingSnapshot() {
 			s.loadAccounts()
 		}
+	}
+}
+
+func (s *trayState) monitorClaudeClose() {
+	p := platform.Current()
+	wasRunning, err := p.IsRunning()
+	if err != nil {
+		return
+	}
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		running, err := p.IsRunning()
+		if err != nil {
+			wasRunning = false
+			continue
+		}
+		if wasRunning && !running {
+			s.saveClosedSession(p)
+		}
+		wasRunning = running
+	}
+}
+
+func (s *trayState) saveClosedSession(p platform.Platform) {
+	if s.workflowSnapshot() != nil || s.switchingSnapshot() {
+		return
+	}
+	appData, err := p.AppDataPath()
+	if err != nil {
+		return
+	}
+	current, err := s.store.Current()
+	if err != nil || current == "" || !s.store.Exists(current) {
+		return
+	}
+	matched, health := s.store.MatchLiveAt(platform.CookiesPath(appData))
+	if health != profile.HealthUsable || matched != current {
+		return
+	}
+	lock, err := acquireOperationLock("operation")
+	if err != nil {
+		return
+	}
+	defer lock.Release()
+	if s.workflowSnapshot() != nil || s.switchingSnapshot() {
+		return
+	}
+	running, err := p.IsRunning()
+	if err != nil || running {
+		return
+	}
+	if err := saveProfileWith(current, s.store, p, io.Discard); err != nil {
+		s.setStatus("No se pudo guardar la sesión cerrada: " + err.Error())
 	}
 }
 
@@ -731,8 +786,8 @@ func switchProfileFromTray(name string, store *profile.Store) error {
 
 func confirmSessionUpdate(current, target string) bool {
 	choice, err := trayChoice(
-		"Sesión de Claude actualizada",
-		"Claude tiene una sesión válida que ya no coincide exactamente con la copia guardada de \""+current+"\".\n\nEsto puede ocurrir cuando Claude renueva la sesión o si se inició otra cuenta manualmente.\n\n¿Quieres guardar la sesión actual como \""+current+"\" y continuar el cambio a \""+target+"\"?",
+		"Cuenta diferente detectada",
+		"La cuenta abierta no coincide con \""+current+"\".\n\n¿Quieres guardarla como \""+current+"\" y cambiar a \""+target+"\"?\n\nSí: guardar y cambiar.\nNo o Cancelar: no modificar nada.",
 	)
 	return err == nil && choice == trayYes
 }

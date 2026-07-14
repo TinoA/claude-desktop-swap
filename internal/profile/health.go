@@ -30,6 +30,11 @@ type Inspection struct {
 	Reason string
 }
 
+type cookieEvidence struct {
+	sessionDigest      string
+	accountFingerprint string
+}
+
 const chromiumEpochOffsetMicros int64 = 11644473600000000
 
 const inspectionTimeout = 500 * time.Millisecond
@@ -122,6 +127,17 @@ func cookieDigest(path string) (string, error) {
 // whole-file digest, this remains stable when Chromium refreshes unrelated
 // cookies or rewrites SQLite metadata.
 func SessionDigest(path string) (string, error) {
+	evidence, err := readCookieEvidence(path)
+	if err != nil {
+		return "", err
+	}
+	if evidence.sessionDigest == "" {
+		return "", errors.New("session cookie has no value")
+	}
+	return evidence.sessionDigest, nil
+}
+
+func readCookieEvidence(path string) (cookieEvidence, error) {
 	dsn := &url.URL{Scheme: "file", Path: sqlitePath(path)}
 	query := dsn.Query()
 	query.Set("mode", "ro")
@@ -129,29 +145,61 @@ func SessionDigest(path string) (string, error) {
 	dsn.RawQuery = query.Encode()
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
-		return "", err
+		return cookieEvidence{}, err
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	ctx, cancel := context.WithTimeout(context.Background(), inspectionTimeout)
 	defer cancel()
 
-	var encrypted []byte
-	var plain string
-	err = db.QueryRowContext(ctx, `
-		SELECT encrypted_value, value
+	rows, err := db.QueryContext(ctx, `
+		SELECT name, encrypted_value, value
 		FROM cookies
-		WHERE host_key IN ('.claude.ai', 'claude.ai') AND name = 'sessionKey'
-		LIMIT 1`).Scan(&encrypted, &plain)
+		WHERE host_key IN ('.claude.ai', 'claude.ai')
+			AND name IN ('sessionKey', 'lastActiveOrg', 'routingHint')
+		ORDER BY CASE host_key WHEN '.claude.ai' THEN 0 ELSE 1 END`)
 	if err != nil {
-		return "", err
+		return cookieEvidence{}, err
 	}
-	if len(encrypted) == 0 {
-		encrypted = []byte(plain)
+	defer rows.Close()
+	values := make(map[string][]byte, 3)
+	for rows.Next() {
+		var name, plain string
+		var encrypted []byte
+		if err := rows.Scan(&name, &encrypted, &plain); err != nil {
+			return cookieEvidence{}, err
+		}
+		if _, exists := values[name]; exists {
+			continue
+		}
+		if len(encrypted) == 0 {
+			encrypted = []byte(plain)
+		}
+		if len(encrypted) > 0 {
+			values[name] = encrypted
+		}
 	}
-	if len(encrypted) == 0 {
-		return "", errors.New("session cookie has no value")
+	if err := rows.Err(); err != nil {
+		return cookieEvidence{}, err
 	}
-	h := sha256.Sum256(encrypted)
-	return fmt.Sprintf("%x", h[:]), nil
+	evidence := cookieEvidence{sessionDigest: digestValue(values["sessionKey"])}
+	org := values["lastActiveOrg"]
+	routing := values["routingHint"]
+	if len(org) > 0 && len(routing) > 0 {
+		h := sha256.New()
+		_, _ = h.Write([]byte("lastActiveOrg\x00"))
+		_, _ = h.Write(org)
+		_, _ = h.Write([]byte("\x00routingHint\x00"))
+		_, _ = h.Write(routing)
+		evidence.accountFingerprint = fmt.Sprintf("%x", h.Sum(nil))
+	}
+	return evidence, nil
+}
+
+func digestValue(value []byte) string {
+	if len(value) == 0 {
+		return ""
+	}
+	digest := sha256.Sum256(value)
+	return fmt.Sprintf("%x", digest[:])
 }
