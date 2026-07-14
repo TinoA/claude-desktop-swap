@@ -31,3 +31,15 @@ func TestParseVersionRejectsNonSemverValues(t *testing.T) {
 		t.Fatalf("parseVersion = %v/%v", got, ok)
 	}
 }
+
+func TestDisplayVersion(t *testing.T) {
+	if got := displayVersion("1.0.3"); got != "v1.0.3" {
+		t.Fatalf("displayVersion = %q, want v1.0.3", got)
+	}
+	if got := displayVersion("v1.0.3"); got != "v1.0.3" {
+		t.Fatalf("displayVersion = %q, want v1.0.3", got)
+	}
+	if got := displayVersion("local-test"); got != "local-test" {
+		t.Fatalf("displayVersion = %q, want local-test", got)
+	}
+}

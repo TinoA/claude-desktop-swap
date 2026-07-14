@@ -36,6 +36,7 @@ OutputBaseFilename=Windows-Claude-Swap-Setup-{#AppArch}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\cmd\assets\windows-claude-swap-icon-v2.ico
 UninstallDisplayName=Windows Claude Swap
 Uninstallable=yes
 LicenseFile=..\LICENSE
@@ -45,12 +46,13 @@ Name: "startup"; Description: "Iniciar Windows Claude Swap con Windows"; GroupDe
 
 [Files]
 Source: "dist\windows_{#AppArch}\claude-desktop-swap.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\cmd\assets\windows-claude-swap-icon-v2.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Windows Claude Swap"; Filename: "{app}\claude-desktop-swap.exe"; Parameters: "tray"; WorkingDir: "{app}"
-Name: "{userstartup}\Windows Claude Swap"; Filename: "{app}\claude-desktop-swap.exe"; Parameters: "tray"; WorkingDir: "{app}"; Tasks: startup
+Name: "{group}\Windows Claude Swap"; Filename: "{app}\claude-desktop-swap.exe"; Parameters: "tray"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"
+Name: "{userstartup}\Windows Claude Swap"; Filename: "{app}\claude-desktop-swap.exe"; Parameters: "tray"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"; Tasks: startup
 
 [Run]
 Filename: "{app}\claude-desktop-swap.exe"; Parameters: "tray"; Description: "Iniciar Windows Claude Swap"; Flags: nowait postinstall skipifsilent

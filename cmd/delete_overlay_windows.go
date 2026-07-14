@@ -100,7 +100,7 @@ type deleteWndClassEx struct {
 
 var deleteWindowProc = windows.NewCallback(nativeDeleteWndProc)
 
-func trayDeleteConfirm(name string) (bool, error) {
+func trayDeleteConfirm(name string, onlyActive bool) (bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := registerDeleteClasses(); err != nil {
@@ -153,7 +153,7 @@ func trayDeleteConfirm(name string) (bool, error) {
 		deleteDestroyWindow.Call(overlay)
 	}()
 
-	createDeleteControls(dialog, name)
+	createDeleteControls(dialog, name, onlyActive)
 	deleteSetForeground.Call(dialog)
 	deleteSetFocus.Call(dialog)
 	var message deleteMSG
@@ -203,12 +203,22 @@ func newDeleteBrush(color uint32) uintptr {
 	return brush
 }
 
-func createDeleteControls(dialog uintptr, name string) {
+func createDeleteControls(dialog uintptr, name string, onlyActive bool) {
 	createDeleteControl("STATIC", "Confirmar eliminación", 35, 28, 490, 32, dialog, 0)
-	createDeleteControl("STATIC", "Se eliminarán perfil, token cifrado y datos locales de:", 35, 82, 490, 24, dialog, 0)
-	createDeleteControl("STATIC", name, 35, 108, 490, 24, dialog, 0)
-	createDeleteControl("STATIC", "La cuenta de Anthropic no se elimina.", 35, 142, 490, 24, dialog, 0)
-	createDeleteControl("STATIC", "Las demás cuentas se conservarán.", 35, 166, 490, 24, dialog, 0)
+	if onlyActive {
+		createDeleteControl("STATIC", "Es la única cuenta guardada y está activa.", 35, 82, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "Claude Desktop seguirá abierto con esta sesión.", 35, 108, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "El switcher dejará de guardar esta cuenta.", 35, 134, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "La cuenta de Anthropic no se elimina.", 35, 160, 490, 24, dialog, 0)
+	} else {
+		createDeleteControl("STATIC", "Se eliminarán perfil, token cifrado y datos locales de:", 35, 82, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", name, 35, 108, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "La cuenta de Anthropic no se elimina.", 35, 142, 490, 24, dialog, 0)
+		createDeleteControl("STATIC", "Las demás cuentas se conservarán.", 35, 166, 490, 24, dialog, 0)
+	}
+	if onlyActive {
+		createDeleteControl("STATIC", name, 35, 186, 490, 24, dialog, 0)
+	}
 	createDeleteControl("BUTTON", "Eliminar", 300, 210, 110, 32, dialog, deleteIDConfirm)
 	createDeleteControl("BUTTON", "Cancelar", 420, 210, 110, 32, dialog, deleteIDCancel)
 }

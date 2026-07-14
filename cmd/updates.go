@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const githubReleaseAPI = "https://api.github.com/repos/TinoA/claude-desktop-swap/releases/latest"
+const (
+	githubReleaseAPI  = "https://api.github.com/repos/TinoA/claude-desktop-swap/releases/latest"
+	githubReleasePage = "https://github.com/TinoA/claude-desktop-swap/releases/latest"
+)
 
 type githubRelease struct {
 	TagName    string `json:"tag_name"`
@@ -79,4 +82,12 @@ func parseVersion(value string) ([3]int, bool) {
 		version[i] = number
 	}
 	return version, true
+}
+
+func displayVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if _, ok := parseVersion(value); ok && !strings.HasPrefix(strings.ToLower(value), "v") {
+		return "v" + value
+	}
+	return value
 }

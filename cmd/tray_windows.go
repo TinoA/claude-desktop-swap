@@ -5,28 +5,26 @@ package cmd
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
 	"github.com/getlantern/systray"
-	trayicon "github.com/getlantern/systray/example/icon"
 	"github.com/spf13/cobra"
 )
 
-const createNewConsole = 0x00000010
-
 const loginWindowTimeout = 30 * time.Second
+
+//go:embed assets/windows-claude-swap-icon-v2.ico
+var trayIcon []byte
 
 var (
 	errDeleteSessionUnknown      = errors.New("claude session cannot be verified")
@@ -45,7 +43,6 @@ var cmdTray = &cobra.Command{
 type trayState struct {
 	mu              sync.Mutex
 	store           *profile.Store
-	exe             string
 	trayLock        *operationLock
 	root            *systray.MenuItem
 	add             *systray.MenuItem
@@ -58,6 +55,7 @@ type trayState struct {
 	exportLocal     *systray.MenuItem
 	importer        *systray.MenuItem
 	update          *systray.MenuItem
+	version         *systray.MenuItem
 	items           map[string]*systray.MenuItem
 	deleteItems     map[string]*systray.MenuItem
 	workflow        *addWorkflow
@@ -75,17 +73,13 @@ func runTray() error {
 	if err != nil {
 		return err
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	state := &trayState{store: store, exe: exe, trayLock: lock, items: make(map[string]*systray.MenuItem), deleteItems: make(map[string]*systray.MenuItem)}
+	state := &trayState{store: store, trayLock: lock, items: make(map[string]*systray.MenuItem), deleteItems: make(map[string]*systray.MenuItem)}
 	systray.Run(func() { state.ready() }, func() {})
 	return nil
 }
 
 func (s *trayState) ready() {
-	systray.SetIcon(trayicon.Data)
+	systray.SetIcon(trayIcon)
 	systray.SetTitle(ProductName)
 	systray.SetTooltip(ProductName + " - Claude Desktop account switcher")
 
@@ -106,7 +100,8 @@ func (s *trayState) ready() {
 	s.update = systray.AddMenuItem("Nueva versión disponible", "Abrir la última versión de Windows Claude Swap")
 	s.update.Hide()
 	systray.AddSeparator()
-	openCLI := systray.AddMenuItem("Abrir CLI", "Abrir una terminal con la ayuda del CLI")
+	s.version = systray.AddMenuItem("Versión actual: "+displayVersion(Version), "Versión instalada de Windows Claude Swap")
+	s.version.Disable()
 	quit := systray.AddMenuItem("Salir", "Cerrar el icono de bandeja")
 
 	s.loadAccounts()
@@ -119,7 +114,6 @@ func (s *trayState) ready() {
 	go s.handleUpdate()
 	go s.handleFinish()
 	go s.handleCancel()
-	go s.handleOpenCLI(openCLI)
 	go func() {
 		<-quit.ClickedCh
 		systray.Quit()
@@ -350,14 +344,6 @@ func (s *trayState) handleCancel() {
 	}
 }
 
-func (s *trayState) handleOpenCLI(item *systray.MenuItem) {
-	for range item.ClickedCh {
-		if err := s.startCLI("--help"); err != nil {
-			s.setStatus("Error abriendo CLI: " + err.Error())
-		}
-	}
-}
-
 func (s *trayState) handleUpdate() {
 	for range s.update.ClickedCh {
 		if err := openLatestRelease(); err != nil {
@@ -448,7 +434,7 @@ func (s *trayState) monitorUpdates() {
 }
 
 func openLatestRelease() error {
-	return exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "https://github.com/FranCalveyra/claude-desktop-swap/releases/latest").Start()
+	return exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", githubReleasePage).Start()
 }
 
 func (s *trayState) restorePendingIfPresent() {
@@ -678,15 +664,17 @@ func (s *trayState) loadAccounts() {
 		return
 	}
 	s.claudeInstalled = platform.Installed()
-	if s.claudeInstalled && len(profiles) > 0 && !switching {
+	if s.claudeInstalled && !switching {
 		s.add.Enable()
 	} else {
 		s.add.Disable()
 	}
 	if len(profiles) == 0 {
+		s.root.Hide()
 		s.delete.Hide()
 		s.delete.Disable()
 	} else {
+		s.root.Show()
 		s.delete.Show()
 		if switching {
 			s.delete.Disable()
@@ -809,7 +797,9 @@ func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 			s.setStatus("No se eliminó " + name + ": no se pudo verificar la cuenta activa")
 			continue
 		}
-		if active {
+		profiles, profilesErr := s.store.List()
+		onlyActive := active && profilesErr == nil && len(profiles) == 1
+		if active && !onlyActive {
 			message := "No se eliminó \"" + name + "\" porque está marcada como la cuenta activa.\n\nCambia primero a otra cuenta y vuelve a intentarlo."
 			if liveVerified {
 				message = "No se eliminó \"" + name + "\" porque es la cuenta que está abierta actualmente en Claude Desktop.\n\nCambia primero a otra cuenta y vuelve a intentarlo."
@@ -818,7 +808,7 @@ func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 			s.setStatus("No se eliminó " + name + ": es la cuenta activa")
 			continue
 		}
-		confirmed, err := trayDeleteConfirm(name)
+		confirmed, err := trayDeleteConfirm(name, onlyActive)
 		if err != nil || !confirmed {
 			continue
 		}
@@ -837,9 +827,25 @@ func (s *trayState) watchDeleteAccount(item *systray.MenuItem, name string) {
 				s.setStatus("Error eliminando cuenta: " + lockErr.Error())
 				return
 			}
+			s.removeDeletedAccount(name)
 			s.loadAccounts()
 			s.setStatus("Cuenta eliminada: " + name)
 		}()
+	}
+}
+
+func (s *trayState) removeDeletedAccount(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item, ok := s.items[name]; ok {
+		item.Hide()
+		item.Disable()
+		delete(s.items, name)
+	}
+	if item, ok := s.deleteItems[name]; ok {
+		item.Hide()
+		item.Disable()
+		delete(s.deleteItems, name)
 	}
 }
 
@@ -851,10 +857,20 @@ func (s *trayState) deleteAccountIsActive(name string) (bool, bool, error) {
 		return current == name, false, nil
 	}
 	if _, err := p.IsRunning(); err != nil {
+		if current != "" {
+			return current == name, false, nil
+		}
 		return false, false, fmt.Errorf("claude no puede verificarse: %w", err)
 	}
 	liveName, liveHealth := s.store.MatchLiveAt(platform.CookiesPath(appData))
+	return resolveDeleteActivity(name, current, liveName, liveHealth)
+}
+
+func resolveDeleteActivity(name, current, liveName string, liveHealth profile.Health) (bool, bool, error) {
 	if liveHealth == profile.HealthUnknown {
+		if current != "" {
+			return current == name, false, nil
+		}
 		return false, false, errDeleteSessionUnknown
 	}
 	if liveHealth == profile.HealthUsable {
@@ -953,13 +969,6 @@ func (s *trayState) setStatus(value string) {
 		value = value[:180]
 	}
 	s.status.SetTitle(value)
-}
-
-func (s *trayState) startCLI(args ...string) error {
-	command := exec.Command(s.exe, args...)
-	command.Dir = filepath.Dir(s.exe)
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
-	return command.Start()
 }
 
 type trayChoiceValue string
