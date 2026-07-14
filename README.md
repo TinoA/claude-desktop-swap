@@ -29,9 +29,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
 
-> [!IMPORTANT]
-> Windows Claude Swap is made for **Claude Desktop on Windows**. It does not manage or close Claude Code.
-
 ## Install in a minute
 
 1. Download the **Windows x64 installer** using the button above. If your Windows device uses an ARM processor, choose **Windows ARM64** instead.
