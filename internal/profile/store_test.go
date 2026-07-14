@@ -1,10 +1,12 @@
 package profile
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -353,6 +355,50 @@ func TestMatchLiveDoesNotTrustStaleCurrent(t *testing.T) {
 	}
 }
 
+func TestMatchLiveRecognizesRenewedSessionByAccountFingerprint(t *testing.T) {
+	store := newTestStore(t)
+	saved := syntheticAppData(t, "old-session")
+	setAccountIdentity(t, filepath.Join(saved, cookiesFile), "org-a", "route-a")
+	if err := store.Checkpoint("personal", saved); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.AccountFingerprint) != sha256.Size*2 || strings.Contains(meta.AccountFingerprint, "org-a") || strings.Contains(meta.AccountFingerprint, "route-a") {
+		t.Fatalf("unsafe account fingerprint metadata: %q", meta.AccountFingerprint)
+	}
+	live := syntheticAppData(t, "renewed-session")
+	setAccountIdentity(t, filepath.Join(live, cookiesFile), "org-a", "route-a")
+
+	if name, health := store.MatchLive(live); name != "personal" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want personal/usable", name, health)
+	}
+	differentAccount := syntheticAppData(t, "different-session")
+	setAccountIdentity(t, filepath.Join(differentAccount, cookiesFile), "org-a", "route-b")
+	if name, health := store.MatchLive(differentAccount); name != "" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want different usable account", name, health)
+	}
+}
+
+func TestMatchLiveRejectsAmbiguousAccountFingerprint(t *testing.T) {
+	store := newTestStore(t)
+	for _, name := range []string{"first", "second"} {
+		appData := syntheticAppData(t, name+"-session")
+		setAccountIdentity(t, filepath.Join(appData, cookiesFile), "shared-org", "shared-route")
+		if err := store.Checkpoint(name, appData); err != nil {
+			t.Fatal(err)
+		}
+	}
+	live := syntheticAppData(t, "renewed-session")
+	setAccountIdentity(t, filepath.Join(live, cookiesFile), "shared-org", "shared-route")
+
+	if name, health := store.MatchLive(live); name != "" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want ambiguous usable session", name, health)
+	}
+}
+
 func TestWipePreservesMachineAndGlobalFiles(t *testing.T) {
 	store := newTestStore(t)
 	appData := syntheticAppData(t, "live")
@@ -407,6 +453,15 @@ func createCookiesDBWithMarker(t *testing.T, path, marker string) {
 	mustExec(t, db, `INSERT INTO fixture_marker VALUES (?)`, marker)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func setAccountIdentity(t *testing.T, path, org, routing string) {
+	t.Helper()
+	db := openSQLite(t, path)
+	defer db.Close()
+	for name, value := range map[string]string{"lastActiveOrg": org, "routingHint": routing} {
+		mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', ?, 0, '', ?)`, name, []byte(value))
 	}
 }
 
