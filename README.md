@@ -4,6 +4,10 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/tray-menu-preview.png" alt="Claude Desktop Switcher account menu in the Windows system tray" width="900">
+</p>
+
 <h1 align="center">Claude Desktop Switcher</h1>
 
 <p align="center">
