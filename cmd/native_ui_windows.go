@@ -460,7 +460,7 @@ func nativeTrayFileDialog(open bool, defaultName string) (string, error) {
 	defer runtime.UnlockOSThread()
 	buffer := make([]uint16, 32768)
 	if defaultName == "" {
-		defaultName = "windows-claude-swap-backup.csb"
+		defaultName = "claude-desktop-switcher-backup.csb"
 	}
 	copy(buffer, windows.StringToUTF16(defaultName))
 	filter := nativeBackupFileFilter()
@@ -493,7 +493,7 @@ func nativeTrayFileDialog(open bool, defaultName string) (string, error) {
 }
 
 func nativeBackupFileFilter() []uint16 {
-	return utf16.Encode([]rune("Windows Claude Swap backup (*.csb)\x00*.csb\x00All files (*.*)\x00*.*\x00\x00"))
+	return utf16.Encode([]rune("Claude Desktop Switcher backup (*.csb)\x00*.csb\x00All files (*.*)\x00*.*\x00\x00"))
 }
 
 type nativeOpenFileName struct {
@@ -553,7 +553,7 @@ func runNativeOverlay(overlay *switchOverlay, message string, success bool, icon
 	hwnd, _, _ := nativeCreateWindow.Call(
 		nativeWSExLayered|nativeWSExTopmost|nativeWSExToolWindow,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("WindowsClaudeSwapOverlay"))),
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Windows Claude Swap"))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(ProductName))),
 		nativeWSPopup|nativeWSVisible,
 		left, top, width, height, 0, 0, hInstance, 0,
 	)

@@ -16,13 +16,13 @@
 
 [Setup]
 AppId={{7B9DFBB8-53B7-4C6C-9C4F-1EAE5B4A7C09}
-AppName=Windows Claude Swap
+AppName=Claude Desktop Switcher
 AppVersion={#AppVersion}
 AppPublisher=TinoA
-AppPublisherURL=https://github.com/TinoA/claude-desktop-swap
-AppSupportURL=https://github.com/TinoA/claude-desktop-swap/issues
-AppUpdatesURL=https://github.com/TinoA/claude-desktop-swap/releases
-DefaultDirName={localappdata}\Windows Claude Swap
+AppPublisherURL=https://github.com/TinoA/claude-desktop-switcher
+AppSupportURL=https://github.com/TinoA/claude-desktop-switcher/issues
+AppUpdatesURL=https://github.com/TinoA/claude-desktop-switcher/releases
+DefaultDirName={localappdata}\Claude Desktop Switcher
 PrivilegesRequired=lowest
 ArchitecturesAllowed={#AllowedArchitectures}
 ArchitecturesInstallIn64BitMode={#InstallMode}
@@ -30,18 +30,18 @@ CloseApplications=yes
 CloseApplicationsFilter=claude-desktop-swap.exe
 RestartApplications=yes
 OutputDir=dist\installer
-OutputBaseFilename=Windows-Claude-Swap-Setup-{#AppArch}
+OutputBaseFilename=Claude-Desktop-Switcher-Setup-{#AppArch}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=..\cmd\assets\windows-claude-swap-icon-v2.ico
-UninstallDisplayName=Windows Claude Swap
+UninstallDisplayName=Claude Desktop Switcher
 UninstallDisplayIcon={app}\windows-claude-swap-icon-v2.ico
 Uninstallable=yes
 LicenseFile=..\LICENSE
 
 [Tasks]
-Name: "startup"; Description: "Start Windows Claude Swap with Windows"; GroupDescription: "Additional options:"
+Name: "startup"; Description: "Start Claude Desktop Switcher with Windows"; GroupDescription: "Additional options:"
 
 [Dirs]
 Name: "{app}"; Permissions: users-readexec
@@ -55,16 +55,17 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
+; Remove shortcuts created by versions released before the product rename.
 Type: filesandordirs; Name: "{userprograms}\Windows Claude Swap"
 Type: files; Name: "{userprograms}\Windows Claude Swap.lnk"
 
 [Icons]
 ; Windows Search can end the Go GUI process before main; the native launcher relays a normal shell launch without a console.
-Name: "{userprograms}\Windows Claude Swap"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"
-Name: "{userstartup}\Windows Claude Swap"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"; Tasks: startup
+Name: "{userprograms}\Claude Desktop Switcher"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"
+Name: "{userstartup}\Claude Desktop Switcher"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"; Tasks: startup
 
 [Run]
-Filename: "{app}\windows-claude-swap-launcher.exe"; Description: "Start Windows Claude Swap"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\windows-claude-swap-launcher.exe"; Description: "Start Claude Desktop Switcher"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 var

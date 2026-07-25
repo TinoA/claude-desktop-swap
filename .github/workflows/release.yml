@@ -107,4 +107,4 @@ jobs:
           TAG: ${{ needs.version.outputs.tag_name }}
           ARCH: ${{ matrix.arch }}
         run: |
-          gh release upload $env:TAG "installer/dist/installer/Windows-Claude-Swap-Setup-$env:ARCH.exe" --clobber --repo "${{ github.repository }}"
+          gh release upload $env:TAG "installer/dist/installer/Claude-Desktop-Switcher-Setup-$env:ARCH.exe" --clobber --repo "${{ github.repository }}"

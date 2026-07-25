@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/platform"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 	"github.com/spf13/cobra"
 )
 

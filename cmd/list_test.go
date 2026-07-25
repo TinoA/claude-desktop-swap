@@ -3,7 +3,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 )
 
 func TestHealthLabelDistinguishesAllStates(t *testing.T) {

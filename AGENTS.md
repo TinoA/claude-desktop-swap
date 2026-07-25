@@ -1,4 +1,4 @@
-# claude-desktop-swap
+# Claude Desktop Switcher
 
 A CLI tool to switch between multiple Claude Desktop accounts without logging out.
 
@@ -29,11 +29,11 @@ Switching accounts = swapping the `sessionKey`, `sessionKeyLC`, `routingHint`, `
 ## Commands
 
 ```
-claude-desktop-swap save <name>        # snapshot current session as a named profile
-claude-desktop-swap add <name>         # add a new account interactively without manual logout
-claude-desktop-swap use [name]         # switch to a saved profile (kills + restarts Claude); no name = interactive picker
-claude-desktop-swap list               # list saved profiles
-claude-desktop-swap delete <name>      # remove a profile
+claude-desktop-switcher save <name>        # snapshot current session as a named profile
+claude-desktop-switcher add <name>         # add a new account interactively without manual logout
+claude-desktop-switcher use [name]         # switch to a saved profile (kills + restarts Claude); no name = interactive picker
+claude-desktop-switcher list               # list saved profiles
+claude-desktop-switcher delete <name>      # remove a profile
 ```
 
 ## Rules for AI agents

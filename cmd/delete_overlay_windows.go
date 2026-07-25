@@ -206,7 +206,7 @@ func newDeleteBrush(color uint32) uintptr {
 func createDeleteControls(dialog uintptr, name string) {
 	createDeleteControl("STATIC", "Delete account?", 32, 24, 456, 30, dialog, 0)
 	createDeleteControl("STATIC", name, 32, 66, 456, 24, dialog, 0)
-	createDeleteControl("STATIC", "Remove its saved sign-in data from Windows Claude Swap?", 32, 98, 456, 24, dialog, 0)
+	createDeleteControl("STATIC", "Remove its saved sign-in data from Claude Desktop Switcher?", 32, 98, 456, 24, dialog, 0)
 	createDeleteControl("STATIC", "Your Claude account will not be deleted.", 32, 124, 456, 24, dialog, 0)
 	createDeleteControl("BUTTON", "Delete", 268, 164, 104, 32, dialog, deleteIDConfirm)
 	createDeleteControl("BUTTON", "Cancel", 384, 164, 104, 32, dialog, deleteIDCancel)

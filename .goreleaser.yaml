@@ -1,13 +1,13 @@
 version: 2
 
-project_name: claude-desktop-swap
+project_name: claude-desktop-switcher
 
 builds:
-  - binary: claude-desktop-swap
+  - binary: claude-desktop-switcher
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/FranCalveyra/claude-desktop-swap/cmd.Version={{.Version}}
+      - -s -w -X github.com/TinoA/claude-desktop-switcher/cmd.Version={{.Version}}
     goos:
       - darwin
       - windows

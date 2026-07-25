@@ -15,7 +15,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/winproc"
+	"github.com/TinoA/claude-desktop-switcher/internal/winproc"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )

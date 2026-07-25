@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 )
 
 func TestSwitchProfileOrdersStopCheckpointRestoreAndLaunch(t *testing.T) {

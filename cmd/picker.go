@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
