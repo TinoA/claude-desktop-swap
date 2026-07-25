@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/TinoA/claude-desktop-switcher/compare/v1.1.0...v1.2.0) (2026-07-25)
+
+
+### Features
+
+* rename product to Claude Desktop Switcher ([7373970](https://github.com/TinoA/claude-desktop-switcher/commit/7373970f0ab4850acaae52003702bdecc1c8876d))
+
 ## [1.1.0](https://github.com/TinoA/claude-desktop-swap/compare/v1.0.3...v1.1.0) (2026-07-25)
 
 
