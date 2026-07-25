@@ -447,7 +447,11 @@ func TestPendingAddPersistsRestartLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
+	gotCreatedAt := got.CreatedAt
+	wantCreatedAt := want.CreatedAt
+	got.CreatedAt = time.Time{}
+	want.CreatedAt = time.Time{}
+	if !gotCreatedAt.Equal(wantCreatedAt) || !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending add = %+v, want %+v", got, want)
 	}
 }
