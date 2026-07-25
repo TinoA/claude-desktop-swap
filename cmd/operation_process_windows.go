@@ -3,15 +3,23 @@
 package cmd
 
 import (
-	"bytes"
-	"fmt"
-	"os/exec"
+	"errors"
+
+	"golang.org/x/sys/windows"
 )
 
 func processAlive(pid int) bool {
-	out, err := exec.Command("tasklist.exe", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
-	if err != nil {
+	if pid <= 0 {
 		return false
 	}
-	return bytes.Contains(out, []byte(fmt.Sprintf("\"%d\"", pid)))
+	process, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
+	}
+	defer func() { _ = windows.CloseHandle(process) }()
+	event, err := windows.WaitForSingleObject(process, 0)
+	if err != nil {
+		return true
+	}
+	return event == uint32(windows.WAIT_TIMEOUT)
 }

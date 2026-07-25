@@ -15,18 +15,25 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/FranCalveyra/claude-desktop-swap/internal/winproc"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 const (
-	windowsPackageFamily = "Claude_pzs8sxrjxfjjc"
-	windowsAUMID         = windowsPackageFamily + "!Claude"
-	processName          = "Claude.exe"
-	processPollInterval  = 100 * time.Millisecond
-	processPolls         = 100
-	processStablePolls   = 3
-	installCacheTTL      = 5 * time.Minute
+	windowsPackageFamily   = "Claude_pzs8sxrjxfjjc"
+	windowsAUMID           = windowsPackageFamily + "!Claude"
+	processName            = "Claude.exe"
+	processPollInterval    = 100 * time.Millisecond
+	processPolls           = 100
+	processStablePolls     = 3
+	installCacheTTL        = 5 * time.Minute
+	mainWindowFocusTimeout = 8 * time.Second
+	windowsSWRestore       = 9
+	windowsWMClose         = 0x0010
+	gracefulCloseTimeout   = 2 * time.Second
+	forcedCloseTimeout     = 3 * time.Second
+	finalCloseGraceTimeout = 5 * time.Second
 )
 
 type windowsInstallKind uint8
@@ -91,27 +98,91 @@ func (w *windowsPlatform) IsRunning() (bool, error) {
 }
 
 func (w *windowsPlatform) KillApp() error {
-	for attempt := range processPolls {
-		roots, err := w.desktopProcessRoots()
+	if hwnd, _ := w.mainWindow(); hwnd != 0 {
+		windowsPostMessage.Call(hwnd, windowsWMClose, 0, 0)
+	}
+	return stopWindowsProcesses(w.waitForExit, w.taskkillOwned, w.forceUntilExit)
+}
+
+func stopWindowsProcesses(
+	waitForExit func(time.Duration) (bool, error),
+	taskkill func(bool),
+	forceUntilExit func(time.Duration) (bool, error),
+) error {
+	if exited, err := waitForExit(gracefulCloseTimeout); err != nil {
+		return err
+	} else if exited {
+		return nil
+	}
+	taskkill(false)
+	if exited, err := waitForExit(gracefulCloseTimeout); err != nil {
+		return err
+	} else if exited {
+		return nil
+	}
+	if exited, err := forceUntilExit(forcedCloseTimeout); err != nil {
+		return err
+	} else if exited {
+		return nil
+	}
+	// Electron children can disappear moments after taskkill returns.
+	if exited, err := waitForExit(finalCloseGraceTimeout); err != nil {
+		return err
+	} else if exited {
+		return nil
+	}
+	return errors.New("claude desktop processes did not exit before timeout")
+}
+
+func (w *windowsPlatform) forceUntilExit(timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		paths, err := w.desktopProcessPaths()
 		if err != nil {
-			return err
+			return false, err
 		}
-		if len(roots) == 0 {
-			return nil
+		if len(paths) == 0 {
+			return true, nil
 		}
-		args := []string{"/PID", strconv.Itoa(roots[0]), "/T"}
-		if attempt >= processPolls/10 {
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		w.taskkillOwned(true)
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func (w *windowsPlatform) taskkillOwned(force bool) {
+	roots, err := w.desktopProcessRoots()
+	if err != nil {
+		return
+	}
+	for _, pid := range roots {
+		args := []string{"/PID", strconv.Itoa(pid), "/T"}
+		if force {
 			args = append(args, "/F")
 		}
-		for _, pid := range roots {
-			args[1] = strconv.Itoa(pid)
-			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-			_ = exec.CommandContext(ctx, "taskkill.exe", args...).Run()
-			cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = winproc.CommandContext(ctx, "taskkill.exe", args...).Run()
+		cancel()
+	}
+}
+
+func (w *windowsPlatform) waitForExit(timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		paths, err := w.desktopProcessPaths()
+		if err != nil {
+			return false, err
+		}
+		if len(paths) == 0 {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
 		}
 		time.Sleep(processPollInterval)
 	}
-	return errors.New("claude desktop processes did not exit before timeout")
 }
 
 func (w *windowsPlatform) LaunchApp() error {
@@ -137,6 +208,7 @@ func (w *windowsPlatform) LaunchApp() error {
 		if len(paths) > 0 {
 			stable++
 			if stable >= processStablePolls {
+				w.focusMainWindow(mainWindowFocusTimeout)
 				return nil
 			}
 		} else {
@@ -163,15 +235,71 @@ func (w *windowsPlatform) WaitForLoginWindow(ctx context.Context) error {
 }
 
 func (w *windowsPlatform) hasMainWindow() bool {
+	found, err := w.mainWindow()
+	if err != nil || found == 0 {
+		return false
+	}
+	focusWindow(found)
+	return true
+}
+
+func (w *windowsPlatform) focusMainWindow(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if w.hasMainWindow() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(processPollInterval)
+	}
+}
+
+func focusWindow(hwnd uintptr) {
+	windowsShowWindow.Call(hwnd, windowsSWRestore)
+	windowsBringWindowToTop.Call(hwnd)
+	if focused, _, _ := windowsSetForegroundWindow.Call(hwnd); focused != 0 {
+		return
+	}
+	currentThread, _, _ := windowsGetCurrentThreadID.Call()
+	targetThread, _, _ := windowsGetWindowProcessID.Call(hwnd, 0)
+	foreground, _, _ := windowsGetForegroundWindow.Call()
+	foregroundThread := uintptr(0)
+	if foreground != 0 {
+		foregroundThread, _, _ = windowsGetWindowProcessID.Call(foreground, 0)
+	}
+	attachedTarget := currentThread != 0 && targetThread != 0 && currentThread != targetThread
+	attachedForeground := currentThread != 0 && foregroundThread != 0 && currentThread != foregroundThread && foregroundThread != targetThread
+	if attachedTarget {
+		windowsAttachThreadInput.Call(currentThread, targetThread, 1)
+		defer windowsAttachThreadInput.Call(currentThread, targetThread, 0)
+	}
+	if attachedForeground {
+		windowsAttachThreadInput.Call(currentThread, foregroundThread, 1)
+		defer windowsAttachThreadInput.Call(currentThread, foregroundThread, 0)
+	}
+	windowsShowWindow.Call(hwnd, windowsSWRestore)
+	windowsBringWindowToTop.Call(hwnd)
+	windowsSetForegroundWindow.Call(hwnd)
+	windowsSetFocus.Call(hwnd)
+}
+
+func (w *windowsPlatform) LoginWindowVisible() (bool, error) {
+	found, err := w.mainWindow()
+	return found != 0, err
+}
+
+func (w *windowsPlatform) mainWindow() (uintptr, error) {
 	pids, err := w.desktopProcessPaths()
 	if err != nil || len(pids) == 0 {
-		return false
+		return 0, err
 	}
 	owned := make(map[int]bool, len(pids))
 	for _, pid := range pids {
 		owned[pid] = true
 	}
-	found := false
+	var found uintptr
 	callback := windows.NewCallback(func(hwnd, _ uintptr) uintptr {
 		var pid uint32
 		windowsGetWindowProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
@@ -184,13 +312,13 @@ func (w *windowsPlatform) hasMainWindow() bool {
 		}
 		length, _, _ := windowsGetWindowTextLength.Call(hwnd)
 		if length > 0 {
-			found = true
+			found = hwnd
 			return 0
 		}
 		return 1
 	})
 	windowsEnumWindows.Call(callback, 0)
-	return found
+	return found, nil
 }
 
 var installCache struct {
@@ -201,12 +329,21 @@ var installCache struct {
 }
 
 var windowsMainWindowAPI = windows.NewLazySystemDLL("user32.dll")
+var windowsKernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 var (
 	windowsEnumWindows         = windowsMainWindowAPI.NewProc("EnumWindows")
 	windowsGetWindowProcessID  = windowsMainWindowAPI.NewProc("GetWindowThreadProcessId")
 	windowsIsWindowVisible     = windowsMainWindowAPI.NewProc("IsWindowVisible")
 	windowsGetWindowTextLength = windowsMainWindowAPI.NewProc("GetWindowTextLengthW")
+	windowsShowWindow          = windowsMainWindowAPI.NewProc("ShowWindow")
+	windowsBringWindowToTop    = windowsMainWindowAPI.NewProc("BringWindowToTop")
+	windowsSetForegroundWindow = windowsMainWindowAPI.NewProc("SetForegroundWindow")
+	windowsGetForegroundWindow = windowsMainWindowAPI.NewProc("GetForegroundWindow")
+	windowsAttachThreadInput   = windowsMainWindowAPI.NewProc("AttachThreadInput")
+	windowsSetFocus            = windowsMainWindowAPI.NewProc("SetFocus")
+	windowsPostMessage         = windowsMainWindowAPI.NewProc("PostMessageW")
+	windowsGetCurrentThreadID  = windowsKernel32.NewProc("GetCurrentThreadId")
 )
 
 func detectWindowsInstallCached() (windowsInstall, []windowsInstall) {
@@ -261,7 +398,7 @@ type windowsProcess struct {
 }
 
 func (w *windowsPlatform) desktopProcesses() ([]windowsProcess, error) {
-	if w.executable == "" {
+	if w.executable == "" && !w.msix {
 		return nil, nil
 	}
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
@@ -328,7 +465,16 @@ func (i windowsInstall) ownsProcess(path string) bool {
 		}
 		return strings.HasPrefix(strings.ToLower(filepath.Base(filepath.Dir(path))), "app-")
 	case installMSIX:
-		return pathWithin(path, root) && strings.EqualFold(filepath.Base(path), processName)
+		if !strings.EqualFold(filepath.Base(path), processName) {
+			return false
+		}
+		for directory := filepath.Dir(path); directory != filepath.Dir(directory); directory = filepath.Dir(directory) {
+			name := strings.ToLower(filepath.Base(directory))
+			if strings.HasPrefix(name, "claude_") && strings.HasSuffix(name, "__"+windowsPackageFamily[strings.LastIndex(windowsPackageFamily, "_")+1:]) {
+				return true
+			}
+		}
+		return false
 	case installPortable, installWin32:
 		return path == launch
 	default:
@@ -361,63 +507,6 @@ func processImagePath(pid uint32) string {
 	return windows.UTF16ToString(buffer[:size])
 }
 
-func desktopProcessPIDs(output, executable string, allowUnknownPath bool) []int {
-	want := normalizeWindowsPath(executable)
-	var pids []int
-	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "|", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		path := normalizeWindowsPath(parts[1])
-		if path != want && (!allowUnknownPath || path != "") {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err == nil {
-			pids = append(pids, pid)
-		}
-	}
-	return pids
-}
-
-func desktopProcessRootPIDs(output, executable string, allowUnknownPath bool) []int {
-	type process struct {
-		pid    int
-		parent int
-	}
-	want := normalizeWindowsPath(executable)
-	matched := make(map[int]process)
-	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "|", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		path := normalizeWindowsPath(parts[2])
-		if path != want && (!allowUnknownPath || path != "") {
-			continue
-		}
-		pid, pidErr := strconv.Atoi(strings.TrimSpace(parts[0]))
-		parent, parentErr := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if pidErr == nil && parentErr == nil {
-			matched[pid] = process{pid: pid, parent: parent}
-		}
-	}
-	roots := make([]int, 0, len(matched))
-	for pid, process := range matched {
-		if _, isChild := matched[process.parent]; !isChild {
-			roots = append(roots, pid)
-		}
-	}
-	if len(roots) == 0 {
-		for pid := range matched {
-			roots = append(roots, pid)
-			break
-		}
-	}
-	return roots
-}
-
 func detectWindowsInstall() (windowsInstall, []windowsInstall) {
 	local := os.Getenv("LOCALAPPDATA")
 	appData := os.Getenv("APPDATA")
@@ -427,8 +516,7 @@ func detectWindowsInstall() (windowsInstall, []windowsInstall) {
 		candidates = append(candidates, registered)
 	}
 	squirrelRoot := filepath.Join(local, "AnthropicClaude")
-	squirrelExe := filepath.Join(squirrelRoot, processName)
-	if packageInstalled(squirrelExe) {
+	if squirrelExe := squirrelExecutable(squirrelRoot); squirrelExe != "" {
 		candidates = appendInstallCandidate(candidates, windowsInstall{
 			id:          "squirrel:" + normalizeWindowsPath(squirrelRoot),
 			root:        filepath.Join(appData, "Claude"),
@@ -437,14 +525,12 @@ func detectWindowsInstall() (windowsInstall, []windowsInstall) {
 			kind:        installSquirrel,
 		})
 	}
-	installLocation := appxInstallLocation()
-	msixExe := filepath.Join(installLocation, "app", processName)
-	if installLocation != "" && packageInstalled(msixExe) {
+	msixPackageDir := filepath.Join(local, "Packages", windowsPackageFamily)
+	if info, err := os.Stat(msixPackageDir); err == nil && info.IsDir() {
 		candidates = appendInstallCandidate(candidates, windowsInstall{
 			id:          "msix:" + windowsPackageFamily,
 			root:        msixRoot,
-			executable:  msixExe,
-			processRoot: installLocation,
+			processRoot: filepath.Join(os.Getenv("ProgramFiles"), "WindowsApps"),
 			kind:        installMSIX,
 			msix:        true,
 		})
@@ -542,7 +628,7 @@ func installPriority(kind windowsInstallKind) int {
 }
 
 func candidateHasProcess(candidate windowsInstall) bool {
-	if candidate.executable == "" {
+	if candidate.executable == "" && !candidate.msix {
 		return false
 	}
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
@@ -589,12 +675,13 @@ func detectRegisteredWin32(appData string) (windowsInstall, bool) {
 			if valueErr != nil || strings.TrimSpace(installLocation) == "" {
 				continue
 			}
+			kind := installWin32
 			launcher := filepath.Join(installLocation, processName)
+			if strings.HasSuffix(strings.ToLower(keyPath), "anthropicclaude") {
+				kind = installSquirrel
+				launcher = squirrelExecutable(installLocation)
+			}
 			if packageInstalled(launcher) {
-				kind := installWin32
-				if strings.HasSuffix(strings.ToLower(keyPath), "anthropicclaude") {
-					kind = installSquirrel
-				}
 				return windowsInstall{
 					id:          fmt.Sprintf("install-%d:%s", kind, normalizeWindowsPath(installLocation)),
 					root:        filepath.Join(appData, "Claude"),
@@ -608,12 +695,32 @@ func detectRegisteredWin32(appData string) (windowsInstall, bool) {
 	return windowsInstall{}, false
 }
 
-func appxInstallLocation() string {
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "(Get-AppxPackage -Name Claude | Select-Object -First 1 -ExpandProperty InstallLocation)").Output()
+func squirrelExecutable(root string) string {
+	launcher := filepath.Join(root, processName)
+	if packageInstalled(launcher) {
+		return launcher
+	}
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	var selected string
+	var selectedTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(strings.ToLower(entry.Name()), "app-") {
+			continue
+		}
+		executable := filepath.Join(root, entry.Name(), processName)
+		info, err := os.Stat(executable)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if selected == "" || info.ModTime().After(selectedTime) || info.ModTime().Equal(selectedTime) && strings.Compare(executable, selected) > 0 {
+			selected = executable
+			selectedTime = info.ModTime()
+		}
+	}
+	return selected
 }
 
 func packageInstalled(executable string) bool {

@@ -22,11 +22,8 @@ type LoginWindowWaiter interface {
 	WaitForLoginWindow(context.Context) error
 }
 
-func Installed() bool {
-	if detector, ok := Current().(InstallationDetector); ok {
-		return detector.IsInstalled()
-	}
-	return false
+type LoginWindowObserver interface {
+	LoginWindowVisible() (bool, error)
 }
 
 // Current returns the Platform implementation for the running OS.

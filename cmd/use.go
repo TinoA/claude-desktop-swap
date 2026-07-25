@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
@@ -39,6 +40,11 @@ var cmdUse = &cobra.Command{
 		return switchProfile(name, store)
 	},
 }
+
+var (
+	errLiveSessionUnrecognized = errors.New("live Claude session is not recognized by a saved profile; no profiles were changed")
+	errLiveSessionUnverified   = errors.New("live Claude session cannot be verified; no profiles were changed")
+)
 
 func profileNameFromArgs(args []string, store *profile.Store) (string, error) {
 	if len(args) == 1 {
@@ -92,9 +98,14 @@ type pathSwitcher interface {
 	RestoreAt(string, string, string) error
 }
 
-type sessionUpdateConfirmer func(current, target string) bool
+const (
+	launchVerificationPoll     = 250 * time.Millisecond
+	launchVerificationSettle   = 3 * time.Second
+	launchVerificationFallback = 5 * time.Second
+	launchVerificationTimeout  = 12 * time.Second
+)
 
-func switchProfileWith(name string, store switchStore, p platform.Platform, out io.Writer, confirmers ...sessionUpdateConfirmer) error {
+func switchProfileWith(name string, store switchStore, p platform.Platform, out io.Writer) error {
 	appData, err := p.AppDataPath()
 	if err != nil {
 		return err
@@ -112,10 +123,34 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 	if err != nil {
 		return fmt.Errorf("detect Claude Desktop: %w", err)
 	}
+	if !wasRunning {
+		fmt.Fprintf(out, "Restoring profile %q...\n", name)
+		var restoreErr error
+		if routed, ok := store.(pathSwitcher); ok {
+			restoreErr = routed.RestoreAt(name, appData, platform.CookiesPath(appData))
+		} else {
+			restoreErr = store.Restore(name, appData)
+		}
+		if restoreErr != nil {
+			return fmt.Errorf("restore profile: %w", restoreErr)
+		}
+		fmt.Fprintln(out, "Starting Claude Desktop...")
+		if err := launchRestoredProfile(name, store, p, appData); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Switched to %q.\n", name)
+		return nil
+	}
 	current, currentErr := store.Current()
 	liveName, liveHealth, hasLiveMatcher := matchLiveProfile(store, platform.CookiesPath(appData))
 	if currentErr != nil {
 		current = ""
+	}
+	if hasLiveMatcher {
+		liveName, err = resolveLiveProfileIdentity(store, appData, liveName, liveHealth)
+		if err != nil {
+			return fmt.Errorf("identify live Claude session: %w", err)
+		}
 	}
 
 	if hasLiveMatcher && liveName == name && liveHealth == profile.HealthUsable {
@@ -127,8 +162,8 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 			return nil
 		}
 		fmt.Fprintln(out, "Starting Claude Desktop...")
-		if err := p.LaunchApp(); err != nil {
-			return fmt.Errorf("profile %q is active but Claude could not start; launch manually: %w", name, err)
+		if err := launchRestoredProfile(name, store, p, appData); err != nil {
+			return err
 		}
 		fmt.Fprintf(out, "Switched to %q.\n", name)
 		return nil
@@ -152,23 +187,19 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 		return operationErr
 	}
 
-	confirmedSessionUpdate := false
 	if hasLiveMatcher {
 		liveName, liveHealth, _ = matchLiveProfile(store, platform.CookiesPath(appData))
+		liveName, err = resolveLiveProfileIdentity(store, appData, liveName, liveHealth)
+		if err != nil {
+			return relaunchPrevious(fmt.Errorf("identify live Claude session: %w", err))
+		}
 		switch liveHealth {
 		case profile.HealthUsable:
 			if liveName == "" {
-				if current == "" || !store.Exists(current) || len(confirmers) == 0 || confirmers[0] == nil {
-					return relaunchPrevious(errors.New("live Claude session is not recognized by a saved profile; refusing to overwrite it"))
-				}
-				if !confirmers[0](current, name) {
-					return relaunchPrevious(errors.New("account switch cancelled; the live Claude session was not changed"))
-				}
-				liveName = current
-				confirmedSessionUpdate = true
+				return relaunchPrevious(errLiveSessionUnrecognized)
 			}
 		case profile.HealthUnknown:
-			return relaunchPrevious(errors.New("live Claude session cannot be verified; refusing to overwrite it"))
+			return relaunchPrevious(errLiveSessionUnverified)
 		}
 	}
 
@@ -178,7 +209,7 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 	} else if liveHealth == profile.HealthUsable {
 		outgoing = liveName
 	}
-	if outgoing != "" && (outgoing != name || confirmedSessionUpdate) {
+	if outgoing != "" && outgoing != name {
 		fmt.Fprintf(out, "Checkpointing profile %q...\n", outgoing)
 		var checkpointErr error
 		if routed, ok := store.(pathSwitcher); ok {
@@ -196,8 +227,8 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 			return fmt.Errorf("track active profile: %w", err)
 		}
 		fmt.Fprintln(out, "Starting Claude Desktop...")
-		if err := p.LaunchApp(); err != nil {
-			return fmt.Errorf("profile %q is active but Claude could not start; launch manually: %w", name, err)
+		if err := launchRestoredProfile(name, store, p, appData); err != nil {
+			return err
 		}
 		fmt.Fprintf(out, "Switched to %q.\n", name)
 		return nil
@@ -215,14 +246,74 @@ func switchProfileWith(name string, store switchStore, p platform.Platform, out 
 	}
 
 	fmt.Fprintln(out, "Starting Claude Desktop...")
+	if err := launchRestoredProfile(name, store, p, appData); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "Switched to %q.\n", name)
+	return nil
+}
+
+type switchIdentityStore interface {
+	FindByAccountIdentityAt(string) (string, error)
+}
+
+func launchRestoredProfile(name string, store switchStore, p platform.Platform, appData string) error {
+	logOffset := profile.LoginLogOffsetAt(appData)
+	startedAt := time.Now()
 	if err := p.LaunchApp(); err != nil {
 		if retryErr := p.LaunchApp(); retryErr != nil {
 			return fmt.Errorf("profile %q is active but Claude could not start; launch manually: %w", name, err)
 		}
 	}
+	identityStore, ok := store.(switchIdentityStore)
+	if !ok {
+		return nil
+	}
 
-	fmt.Fprintf(out, "Switched to %q.\n", name)
-	return nil
+	deadline := time.Now().Add(launchVerificationTimeout)
+	var readySince time.Time
+	var signedOutSince time.Time
+	for {
+		running, err := p.IsRunning()
+		if err != nil {
+			return fmt.Errorf("verify Claude after opening profile %q: %w", name, err)
+		}
+		if !running {
+			return fmt.Errorf("claude closed before profile %q could be verified", name)
+		}
+
+		logState := profile.LatestAccountLogStateSince(appData, logOffset, startedAt)
+		if logState == profile.AccountLogSignedOut {
+			if signedOutSince.IsZero() {
+				signedOutSince = time.Now()
+			}
+			if time.Since(signedOutSince) >= launchVerificationSettle {
+				return fmt.Errorf("claude opened, but profile %q did not remain signed in", name)
+			}
+			readySince = time.Time{}
+		} else {
+			signedOutSince = time.Time{}
+		}
+		identity, identityErr := identityStore.FindByAccountIdentityAt(appData)
+		identityReady := identityErr == nil && identity == name && profile.HasPersistedAccountStateAt(appData)
+		logReady := logState == profile.AccountLogSignedIn ||
+			logState == profile.AccountLogUnknown && time.Since(startedAt) >= launchVerificationFallback
+		if logState != profile.AccountLogSignedOut && identityReady && logReady {
+			if readySince.IsZero() {
+				readySince = time.Now()
+			}
+			if time.Since(readySince) >= launchVerificationSettle {
+				return nil
+			}
+		} else {
+			readySince = time.Time{}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("claude opened, but profile %q could not be verified as signed in", name)
+		}
+		time.Sleep(launchVerificationPoll)
+	}
 }
 
 func matchLiveProfile(store switchStore, cookies string) (name string, health profile.Health, supported bool) {
@@ -234,6 +325,17 @@ func matchLiveProfile(store switchStore, cookies string) (name string, health pr
 	}
 	name, health = matcher.MatchLiveAt(cookies)
 	return name, health, true
+}
+
+func resolveLiveProfileIdentity(store switchStore, appData, name string, health profile.Health) (string, error) {
+	if name != "" || health != profile.HealthUsable {
+		return name, nil
+	}
+	identityStore, ok := store.(switchIdentityStore)
+	if !ok {
+		return "", nil
+	}
+	return identityStore.FindByAccountIdentityAt(appData)
 }
 
 func markCurrentProfile(store switchStore, name string) error {

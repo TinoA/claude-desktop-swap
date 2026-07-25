@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ const (
 	maxBackupTotal    = 1 << 30
 	maxBackupEntries  = 2048
 	backupManifestVer = 1
+
+	importProfilesBackupName = ".profiles-import-backup"
+	importCurrentBackupName  = ".current-import-backup"
+	importStagePrefix        = ".import-stage-"
 )
 
 type BackupProtection string
@@ -181,6 +186,12 @@ func (s *Store) makeBackupArchive() ([]byte, error) {
 		current = nil
 	} else if err != nil {
 		return nil, fmt.Errorf("read active profile marker: %w", err)
+	}
+	currentName := strings.TrimSpace(string(current))
+	if currentName == "" || !validProfileName(currentName) || !s.Exists(currentName) {
+		current = nil
+	} else {
+		current = []byte(currentName)
 	}
 	if err := addBackupBytes(zw, currentFileName, current); err != nil {
 		return nil, err
@@ -462,7 +473,73 @@ func (s *Store) installBackupArchive(archive []byte) error {
 			return fmt.Errorf("backup contains invalid profile name %q", entry.Name())
 		}
 	}
+	if err := validateUniqueBackupAccounts(stageProfiles); err != nil {
+		return err
+	}
 	return s.commitImported(stageProfiles, filepath.Join(stage, currentFileName))
+}
+
+func validateUniqueBackupAccounts(profilesPath string) error {
+	entries, err := os.ReadDir(profilesPath)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]string)
+	seenComposite := make(map[string]string)
+	seenSession := make(map[string]string)
+	seenCookies := make(map[string]string)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		profilePath := filepath.Join(profilesPath, entry.Name())
+		data, err := os.ReadFile(filepath.Join(profilePath, metaFile))
+		if err != nil {
+			continue
+		}
+		var meta Meta
+		if json.Unmarshal(data, &meta) != nil {
+			continue
+		}
+		if existing, ok := seenSession[meta.SessionDigest]; meta.SessionDigest != "" && ok {
+			return fmt.Errorf("backup contains the same Claude account in profiles %q and %q", existing, entry.Name())
+		}
+		if meta.SessionDigest != "" {
+			seenSession[meta.SessionDigest] = entry.Name()
+		}
+		if existing, ok := seenCookies[meta.CookieDigest]; meta.CookieDigest != "" && ok {
+			return fmt.Errorf("backup contains the same Claude account in profiles %q and %q", existing, entry.Name())
+		}
+		if meta.CookieDigest != "" {
+			seenCookies[meta.CookieDigest] = entry.Name()
+		}
+		hash := ""
+		state, err := readAccountState(filepath.Join(profilePath, accountStateFile))
+		if err == nil {
+			hash = primaryAccountUUIDHash(state)
+		}
+		if hash == "" {
+			hash = meta.AccountUUIDHash
+		}
+		if hash == "" {
+			if len(meta.AccountUUIDHashes) < 2 {
+				continue
+			}
+			hashes := append([]string(nil), meta.AccountUUIDHashes...)
+			sort.Strings(hashes)
+			composite := strings.Join(hashes, "\x00")
+			if existing, ok := seenComposite[composite]; ok {
+				return fmt.Errorf("backup contains the same Claude account in profiles %q and %q", existing, entry.Name())
+			}
+			seenComposite[composite] = entry.Name()
+			continue
+		}
+		if existing, ok := seen[hash]; ok {
+			return fmt.Errorf("backup contains the same Claude account in profiles %q and %q", existing, entry.Name())
+		}
+		seen[hash] = entry.Name()
+	}
+	return nil
 }
 
 func safeBackupName(name string) (string, error) {
@@ -480,12 +557,121 @@ func validProfileName(name string) bool {
 	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && !strings.ContainsAny(name, `/\\`) && !strings.HasPrefix(name, ".")
 }
 
+func (s *Store) recoverImportedProfiles() error {
+	finalProfiles := s.profilesPath()
+	oldProfiles := filepath.Join(s.baseDir, importProfilesBackupName)
+	current := filepath.Join(s.baseDir, currentFileName)
+	oldCurrent := filepath.Join(s.baseDir, importCurrentBackupName)
+
+	_, oldProfilesErr := os.Stat(oldProfiles)
+	oldProfilesExists := oldProfilesErr == nil
+	if oldProfilesErr != nil && !errors.Is(oldProfilesErr, os.ErrNotExist) {
+		return oldProfilesErr
+	}
+	_, finalProfilesErr := os.Stat(finalProfiles)
+	finalProfilesExists := finalProfilesErr == nil
+	if finalProfilesErr != nil && !errors.Is(finalProfilesErr, os.ErrNotExist) {
+		return finalProfilesErr
+	}
+	_, currentErr := os.Stat(current)
+	currentExists := currentErr == nil
+	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+		return currentErr
+	}
+	_, oldCurrentErr := os.Stat(oldCurrent)
+	oldCurrentExists := oldCurrentErr == nil
+	if oldCurrentErr != nil && !errors.Is(oldCurrentErr, os.ErrNotExist) {
+		return oldCurrentErr
+	}
+
+	if oldProfilesExists {
+		finalHasProfiles := false
+		if finalProfilesExists {
+			entries, err := os.ReadDir(finalProfiles)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+					finalHasProfiles = true
+					break
+				}
+			}
+		}
+		oldHasProfiles := false
+		entries, err := os.ReadDir(oldProfiles)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+				oldHasProfiles = true
+				break
+			}
+		}
+		if finalProfilesExists && currentExists && (finalHasProfiles || !oldHasProfiles) {
+			if err := os.RemoveAll(oldProfiles); err != nil {
+				return err
+			}
+			if oldCurrentExists {
+				if err := os.Remove(oldCurrent); err != nil {
+					return err
+				}
+			}
+		} else {
+			if finalProfilesExists {
+				if err := os.RemoveAll(finalProfiles); err != nil {
+					return err
+				}
+			}
+			if err := os.Rename(oldProfiles, finalProfiles); err != nil {
+				return fmt.Errorf("recover profiles interrupted during import: %w", err)
+			}
+			if oldCurrentExists {
+				if currentExists {
+					if err := os.Remove(current); err != nil {
+						return err
+					}
+				}
+				if err := os.Rename(oldCurrent, current); err != nil {
+					return fmt.Errorf("recover active profile interrupted during import: %w", err)
+				}
+			}
+		}
+	} else if oldCurrentExists {
+		if currentExists {
+			if err := os.Remove(oldCurrent); err != nil {
+				return err
+			}
+		} else if err := os.Rename(oldCurrent, current); err != nil {
+			return fmt.Errorf("recover active profile marker: %w", err)
+		}
+	}
+
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), importStagePrefix) {
+			if err := os.RemoveAll(filepath.Join(s.baseDir, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Store) commitImported(stageProfiles, stageCurrent string) error {
 	finalProfiles := s.profilesPath()
-	oldProfiles := filepath.Join(s.baseDir, ".profiles-import-backup")
-	oldCurrent := filepath.Join(s.baseDir, ".current-import-backup")
-	_ = os.RemoveAll(oldProfiles)
-	_ = os.Remove(oldCurrent)
+	oldProfiles := filepath.Join(s.baseDir, importProfilesBackupName)
+	oldCurrent := filepath.Join(s.baseDir, importCurrentBackupName)
+	if err := os.RemoveAll(oldProfiles); err != nil {
+		return fmt.Errorf("clean previous profile import backup: %w", err)
+	}
+	if err := os.Remove(oldCurrent); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clean previous active profile import backup: %w", err)
+	}
 	if err := os.Rename(finalProfiles, oldProfiles); err != nil {
 		return fmt.Errorf("prepare existing profiles: %w", err)
 	}
@@ -517,7 +703,11 @@ func (s *Store) commitImported(stageProfiles, stageCurrent string) error {
 		rollback()
 		return err
 	}
-	_ = os.RemoveAll(oldProfiles)
-	_ = os.Remove(oldCurrent)
+	if err := os.RemoveAll(oldProfiles); err != nil {
+		return fmt.Errorf("import completed but previous profiles could not be cleaned: %w", err)
+	}
+	if err := os.Remove(oldCurrent); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("import completed but previous active profile marker could not be cleaned: %w", err)
+	}
 	return nil
 }

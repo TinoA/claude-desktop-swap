@@ -100,7 +100,7 @@ type deleteWndClassEx struct {
 
 var deleteWindowProc = windows.NewCallback(nativeDeleteWndProc)
 
-func trayDeleteConfirm(name string, onlyActive bool) (bool, error) {
+func trayDeleteConfirm(name string) (bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := registerDeleteClasses(); err != nil {
@@ -127,8 +127,8 @@ func trayDeleteConfirm(name string, onlyActive bool) (bool, error) {
 	deleteSetLayered.Call(overlay, 0, 180, deleteLayeredAlpha)
 	deleteShowWindow.Call(overlay, deleteSWShow)
 
-	const dialogWidth = 560
-	const dialogHeight = 270
+	const dialogWidth = 520
+	const dialogHeight = 220
 	dialog, _, err := deleteCreateWindow.Call(
 		deleteWSExTopmost|deleteWSExToolWindow|deleteWSExDialogFrame,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(deleteDialogClass))),
@@ -153,7 +153,7 @@ func trayDeleteConfirm(name string, onlyActive bool) (bool, error) {
 		deleteDestroyWindow.Call(overlay)
 	}()
 
-	createDeleteControls(dialog, name, onlyActive)
+	createDeleteControls(dialog, name)
 	deleteSetForeground.Call(dialog)
 	deleteSetFocus.Call(dialog)
 	var message deleteMSG
@@ -203,24 +203,13 @@ func newDeleteBrush(color uint32) uintptr {
 	return brush
 }
 
-func createDeleteControls(dialog uintptr, name string, onlyActive bool) {
-	createDeleteControl("STATIC", "Confirm deletion", 35, 28, 490, 32, dialog, 0)
-	if onlyActive {
-		createDeleteControl("STATIC", "This is the only saved account and it is active.", 35, 82, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "Claude Desktop will remain open with this session.", 35, 108, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "The switcher will stop saving this account.", 35, 134, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "The Anthropic account will not be deleted.", 35, 160, 490, 24, dialog, 0)
-	} else {
-		createDeleteControl("STATIC", "The profile, encrypted token, and local data will be deleted for:", 35, 82, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", name, 35, 108, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "The Anthropic account will not be deleted.", 35, 142, 490, 24, dialog, 0)
-		createDeleteControl("STATIC", "Other accounts will be kept.", 35, 166, 490, 24, dialog, 0)
-	}
-	if onlyActive {
-		createDeleteControl("STATIC", name, 35, 186, 490, 24, dialog, 0)
-	}
-	createDeleteControl("BUTTON", "Delete", 300, 210, 110, 32, dialog, deleteIDConfirm)
-	createDeleteControl("BUTTON", "Cancel", 420, 210, 110, 32, dialog, deleteIDCancel)
+func createDeleteControls(dialog uintptr, name string) {
+	createDeleteControl("STATIC", "Delete account?", 32, 24, 456, 30, dialog, 0)
+	createDeleteControl("STATIC", name, 32, 66, 456, 24, dialog, 0)
+	createDeleteControl("STATIC", "Remove its saved sign-in data from Windows Claude Swap?", 32, 98, 456, 24, dialog, 0)
+	createDeleteControl("STATIC", "Your Claude account will not be deleted.", 32, 124, 456, 24, dialog, 0)
+	createDeleteControl("BUTTON", "Delete", 268, 164, 104, 32, dialog, deleteIDConfirm)
+	createDeleteControl("BUTTON", "Cancel", 384, 164, 104, 32, dialog, deleteIDCancel)
 }
 
 func createDeleteControl(className, text string, x, y, width, height int, parent uintptr, id uintptr) uintptr {

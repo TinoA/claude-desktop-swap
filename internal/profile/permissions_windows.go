@@ -5,7 +5,8 @@ package profile
 import (
 	"fmt"
 	"os"
-	"os/exec"
+
+	"github.com/FranCalveyra/claude-desktop-swap/internal/winproc"
 )
 
 func securePath(path string) error {
@@ -15,7 +16,7 @@ func securePath(path string) error {
 	}
 	// Keep the current environment's required inherited access entry, then
 	// remove the broad principals that could otherwise read profile snapshots.
-	if out, err := exec.Command("icacls.exe", path, "/inheritance:d", "/grant:r", user+":(OI)(CI)F", "/remove:g", "*S-1-1-0", "*S-1-5-32-545", "*S-1-5-11", "/T", "/C").CombinedOutput(); err != nil {
+	if out, err := winproc.Command("icacls.exe", path, "/inheritance:d", "/grant:r", user+":(OI)(CI)F", "/remove:g", "*S-1-1-0", "*S-1-5-32-545", "*S-1-5-11", "/T", "/C").CombinedOutput(); err != nil {
 		return fmt.Errorf("secure ACL for %s: %w: %s", path, err, string(out))
 	}
 	return nil

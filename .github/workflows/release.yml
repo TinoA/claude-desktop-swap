@@ -6,23 +6,33 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
+  quality:
+    name: Required quality checks
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   version:
     name: Version and release
+    needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
         with:
           release-type: go
           target-branch: main
@@ -32,20 +42,23 @@ jobs:
     needs: version
     if: needs.version.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.version.outputs.tag_name }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
       - name: Test release commit
         run: go test ./...
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
           args: release --clean
@@ -56,17 +69,20 @@ jobs:
     name: Publish Windows installer (${{ matrix.arch }})
     needs: version
     if: needs.version.outputs.release_created == 'true'
-    runs-on: windows-latest
+    runs-on: windows-2022
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.version.outputs.tag_name }}
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -76,11 +92,10 @@ jobs:
           GOARCH: ${{ matrix.arch }}
           VERSION: ${{ needs.version.outputs.tag_name }}
         run: |
-          New-Item -ItemType Directory -Force "installer/dist/windows_$env:GOARCH" | Out-Null
           $version = $env:VERSION.TrimStart('v')
-          go build -trimpath -ldflags "-s -w -X github.com/FranCalveyra/claude-desktop-swap/cmd.Version=$version" -o "installer/dist/windows_$env:GOARCH/claude-desktop-swap.exe" .
+          ./scripts/project.ps1 -Task Build -Arch $env:GOARCH -Version $version
 
-      - uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+      - uses: Minionguyjpro/Inno-Setup-Action@b8e8eb5936437c243592fda645c96dfc6488c275 # v1.2.2
         with:
           path: installer/windows-claude-swap.iss
           options: /DAppArch=${{ matrix.arch }} /DAppVersion=${{ needs.version.outputs.tag_name }}

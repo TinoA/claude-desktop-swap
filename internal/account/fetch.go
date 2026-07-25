@@ -9,16 +9,6 @@ type sessionDecryptor interface {
 	SessionKey(cookiesPath string) (string, error)
 }
 
-// Fetch decrypts the sessionKey cookie at cookiesPath, calls the Claude.ai API,
-// and returns the best-effort email and plan. Returns empty Info on any failure.
-func Fetch(cookiesPath string) Info {
-	d, err := newDecryptor()
-	if err != nil {
-		return Info{}
-	}
-	return fetchWith(d, cookiesPath)
-}
-
 // FetchMany resolves account info for several profiles at once, building the
 // decryptor a single time (one keychain read) and querying the API
 // concurrently. Keys are profile names; values are their Cookies paths.

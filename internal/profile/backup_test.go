@@ -53,6 +53,9 @@ func TestEncryptedBackupRoundTripRestoresProfilesAndTracking(t *testing.T) {
 	if got := destination.Inspect("personal").Health; got != HealthUsable {
 		t.Fatalf("imported health = %s, want usable", got)
 	}
+	if _, err := readAccountState(filepath.Join(destination.profileDir("personal"), accountStateFile)); err != nil {
+		t.Fatalf("imported account authentication state: %v", err)
+	}
 	local := filepath.Join(destination.profileDir("personal"), localStorageDir, leveldbDir, "CURRENT")
 	if got, err := os.ReadFile(local); err != nil || string(got) != "backup-secret" {
 		t.Fatalf("imported Local Storage = %q/%v", got, err)
@@ -61,6 +64,63 @@ func TestEncryptedBackupRoundTripRestoresProfilesAndTracking(t *testing.T) {
 		if got, err := os.ReadFile(filepath.Join(destination.profileDir("personal"), path)); err != nil || string(got) != "backup-secret" {
 			t.Fatalf("imported %s = %q/%v", path, got, err)
 		}
+	}
+}
+
+func TestBackupOmitsStaleActiveProfileMarker(t *testing.T) {
+	source := newTestStore(t)
+	if err := source.Checkpoint("personal", syntheticAppData(t, "stale-current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SetCurrent("missing-profile"); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "accounts.csb")
+	if err := source.Export(backup, "secret"); err != nil {
+		t.Fatal(err)
+	}
+	destination := newTestStore(t)
+	if err := destination.Import(backup, "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if !destination.Exists("personal") {
+		t.Fatal("valid profile was not restored")
+	}
+	if current, err := destination.Current(); err != nil || current != "" {
+		t.Fatalf("current = %q/%v, want empty marker", current, err)
+	}
+}
+
+func TestBackupImportRejectsDuplicatePrimaryAccounts(t *testing.T) {
+	profiles := t.TempDir()
+	hash := identityHash([]byte("11111111-1111-4111-8111-111111111111"))
+	for _, name := range []string{"first", "second"} {
+		path := filepath.Join(profiles, name)
+		if err := os.Mkdir(path, dirPerm); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSONAtomic(filepath.Join(path, metaFile), Meta{Name: name, AccountUUIDHash: hash}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateUniqueBackupAccounts(profiles); err == nil {
+		t.Fatal("duplicate account backup was accepted")
+	}
+}
+
+func TestBackupImportRejectsDuplicateSessionsWithoutPrimaryIdentity(t *testing.T) {
+	profiles := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		path := filepath.Join(profiles, name)
+		if err := os.Mkdir(path, dirPerm); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSONAtomic(filepath.Join(path, metaFile), Meta{Name: name, SessionDigest: "same-session"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateUniqueBackupAccounts(profiles); err == nil {
+		t.Fatal("duplicate session backup was accepted")
 	}
 }
 
@@ -82,6 +142,37 @@ func TestEncryptedBackupRejectsWrongPasswordWithoutReplacingProfiles(t *testing.
 	}
 	if !destination.Exists("keep") || destination.Exists("source") {
 		t.Fatal("wrong-password import changed existing profiles")
+	}
+}
+
+func TestSuccessfulImportReplacesExistingProfiles(t *testing.T) {
+	source := newTestStore(t)
+	if err := source.Checkpoint("source", syntheticAppData(t, "source-replacement")); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SetCurrent("source"); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "accounts.csb")
+	if err := source.Export(backup, "secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := newTestStore(t)
+	if err := destination.Checkpoint("old", syntheticAppData(t, "old-replacement")); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.SetCurrent("old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.Import(backup, "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if destination.Exists("old") || !destination.Exists("source") {
+		t.Fatal("successful import did not replace the previous profile set")
+	}
+	if current, err := destination.Current(); err != nil || current != "source" {
+		t.Fatalf("current = %q/%v, want source", current, err)
 	}
 }
 
@@ -142,4 +233,100 @@ func TestImportRejectsBackupWithTooManyEntries(t *testing.T) {
 	if err := store.installBackupArchive(archive.Bytes()); err == nil {
 		t.Fatal("backup with too many entries was accepted")
 	}
+}
+
+func TestStoreRollsBackImportInterruptedBeforeCurrentMarker(t *testing.T) {
+	base := t.TempDir()
+	profiles := filepath.Join(base, profilesDirName)
+	writeRecoveryProfile(t, filepath.Join(profiles, "old"))
+	mustWriteFile(t, filepath.Join(base, currentFileName), "old")
+	oldProfiles := filepath.Join(base, importProfilesBackupName)
+	oldCurrent := filepath.Join(base, importCurrentBackupName)
+	if err := os.Rename(profiles, oldProfiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(base, currentFileName), oldCurrent); err != nil {
+		t.Fatal(err)
+	}
+	writeRecoveryProfile(t, filepath.Join(profiles, "new"))
+	stage := filepath.Join(base, importStagePrefix+"dead")
+	if err := os.MkdirAll(stage, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := newStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Exists("old") || store.Exists("new") {
+		t.Fatal("interrupted import did not restore the previous profile set")
+	}
+	if current, err := store.Current(); err != nil || current != "old" {
+		t.Fatalf("current = %q/%v, want old", current, err)
+	}
+	for _, path := range []string{oldProfiles, oldCurrent, stage} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("recovery artifact still exists at %s: %v", path, err)
+		}
+	}
+}
+
+func TestStoreFinishesImportInterruptedAfterCurrentMarker(t *testing.T) {
+	base := t.TempDir()
+	profiles := filepath.Join(base, profilesDirName)
+	oldProfiles := filepath.Join(base, importProfilesBackupName)
+	oldCurrent := filepath.Join(base, importCurrentBackupName)
+	writeRecoveryProfile(t, filepath.Join(oldProfiles, "old"))
+	writeRecoveryProfile(t, filepath.Join(profiles, "new"))
+	mustWriteFile(t, oldCurrent, "old")
+	mustWriteFile(t, filepath.Join(base, currentFileName), "new")
+
+	store, err := newStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Exists("new") || store.Exists("old") {
+		t.Fatal("completed imported profile set was not preserved")
+	}
+	if current, err := store.Current(); err != nil || current != "new" {
+		t.Fatalf("current = %q/%v, want new", current, err)
+	}
+	for _, path := range []string{oldProfiles, oldCurrent} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("completed import backup still exists at %s: %v", path, err)
+		}
+	}
+}
+
+func TestStoreRestoresImportBackupWhenProfilesWereRecreatedEmpty(t *testing.T) {
+	base := t.TempDir()
+	profiles := filepath.Join(base, profilesDirName)
+	oldProfiles := filepath.Join(base, importProfilesBackupName)
+	writeRecoveryProfile(t, filepath.Join(oldProfiles, "old"))
+	if err := os.MkdirAll(profiles, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(base, currentFileName), "old")
+
+	store, err := newStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Exists("old") {
+		t.Fatal("previous profiles were not restored from the interrupted import")
+	}
+	if current, err := store.Current(); err != nil || current != "old" {
+		t.Fatalf("current = %q/%v, want old", current, err)
+	}
+	if _, err := os.Stat(oldProfiles); !os.IsNotExist(err) {
+		t.Fatalf("import backup still exists: %v", err)
+	}
+}
+
+func writeRecoveryProfile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(path, metaFile), `{}`)
 }

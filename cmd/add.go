@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"time"
@@ -81,31 +79,4 @@ func waitForClaudeLoginWindow(ctx context.Context, p platform.Platform) error {
 	} else {
 		return err
 	}
-}
-
-func confirmAddFromInput(input io.Reader, workflow *addWorkflow) error {
-	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil {
-		cancelErr := workflow.Cancel()
-		if cancelErr != nil {
-			return fmt.Errorf("login confirmation failed: %w; recovery failed: %v", err, cancelErr)
-		}
-		return fmt.Errorf("login confirmation cancelled: %w", err)
-	}
-	return nil
-}
-
-type trackedCheckpointer interface {
-	Current() (string, error)
-	Checkpoint(string, string) error
-}
-
-func checkpointTrackedSession(store trackedCheckpointer, appData string) error {
-	current, _ := store.Current()
-	if current == "" {
-		return fmt.Errorf("active session has no tracked profile; save it before continuing")
-	}
-	if routed, ok := store.(pathCheckpointer); ok {
-		return routed.CheckpointAt(current, appData, platform.CookiesPath(appData))
-	}
-	return store.Checkpoint(current, appData)
 }

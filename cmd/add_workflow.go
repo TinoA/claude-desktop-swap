@@ -25,30 +25,47 @@ const (
 
 var errAddCancelled = errors.New("account add cancelled")
 var errAddHandled = errors.New("account-add workflow was already handled")
+var errAddLoginNotReady = errors.New("new Claude session is not ready yet")
+
+const maxPersistenceRetries = 1
 
 type addStore interface {
 	Exists(string) bool
 	Current() (string, error)
+	SetCurrent(string) error
+	FindByAccountIdentityAt(string) (string, error)
 	CheckpointAt(string, string, string) error
 	WipeAt(string, string) error
 	RestoreAt(string, string, string) error
 }
 
 type addWorkflow struct {
-	store          addStore
-	platform       platform.Platform
-	appData        string
-	live           string
-	name           string
-	previous       string
-	stage          addStage
-	lock           *operationLock
-	stopped        bool
-	sessionUsable  func(string) bool
-	persistPending func(pendingAdd) error
-	removePending  func() error
-	loginPoll      time.Duration
-	mu             sync.Mutex
+	store              addStore
+	platform           platform.Platform
+	appData            string
+	live               string
+	name               string
+	previous           string
+	stage              addStage
+	resumed            bool
+	lock               *operationLock
+	stopped            bool
+	sessionUsable      func(string) bool
+	loginEvidence      func(string, string) bool
+	accountLogState    func(string, int64, time.Time) profile.AccountLogState
+	accountStateReady  func(string) bool
+	accountStateID     func(string) string
+	persistPending     func(pendingAdd) error
+	removePending      func() error
+	diagnostic         func(string, string, string)
+	loginPoll          time.Duration
+	loginSettle        time.Duration
+	sessionPoll        time.Duration
+	sessionTimeout     time.Duration
+	createdAt          time.Time
+	loginLogOffset     int64
+	persistenceRetries int
+	mu                 sync.Mutex
 }
 
 func newAddWorkflow(store addStore, p platform.Platform) (*addWorkflow, error) {
@@ -57,15 +74,23 @@ func newAddWorkflow(store addStore, p platform.Platform) (*addWorkflow, error) {
 		return nil, err
 	}
 	return &addWorkflow{
-		store:          store,
-		platform:       p,
-		appData:        appData,
-		live:           platform.CookiesPath(appData),
-		stage:          addIdle,
-		sessionUsable:  profile.HasActiveSessionAt,
-		persistPending: writePendingAdd,
-		removePending:  clearPendingAdd,
-		loginPoll:      time.Second,
+		store:             store,
+		platform:          p,
+		appData:           appData,
+		live:              platform.CookiesPath(appData),
+		stage:             addIdle,
+		sessionUsable:     profile.HasActiveSessionAt,
+		loginEvidence:     profile.HasLoginEvidenceAt,
+		accountLogState:   profile.LatestAccountLogStateSince,
+		accountStateReady: profile.HasPersistedAccountStateAt,
+		accountStateID:    profile.PersistedAccountStateFingerprintAt,
+		persistPending:    writePendingAdd,
+		removePending:     clearPendingAdd,
+		diagnostic:        writeAddDiagnostic,
+		loginPoll:         time.Second,
+		loginSettle:       3 * time.Second,
+		sessionPoll:       250 * time.Millisecond,
+		sessionTimeout:    2 * time.Second,
 	}, nil
 }
 
@@ -89,27 +114,32 @@ func (w *addWorkflow) Begin(name string) error {
 		w.lock = lock
 	}
 	w.name = name
-	if w.previous, _ = w.store.Current(); w.previous == "" {
+	w.previous, _ = w.store.Current()
+	if w.previous != "" && !w.store.Exists(w.previous) {
+		w.previous = ""
+	}
+	if w.previous == "" && w.sessionUsable(w.live) {
 		w.finishLock()
 		return errors.New("the active session has no tracked profile; save it before adding another account")
 	}
-	if err := w.persistPending(pendingAdd{Name: name, Previous: w.previous, AppData: w.appData, Live: w.live, CreatedAt: time.Now()}); err != nil {
+	w.createdAt = time.Now()
+	w.loginLogOffset = profile.LoginLogOffsetAt(w.appData)
+	if err := w.persistPending(w.pendingState()); err != nil {
 		w.finishLock()
 		return err
 	}
 	if running, err := w.platform.IsRunning(); err != nil {
 		return w.failBeforeMutation(err)
 	} else if running {
-		if err := w.platform.KillApp(); err != nil {
+		if err := w.stopClaude(); err != nil {
 			return w.failBeforeMutation(err)
 		}
 		w.stopped = true
 	}
-	if !w.sessionUsable(w.live) {
-		return w.recover(errors.New("the current Claude session is not usable"))
-	}
-	if err := w.store.CheckpointAt(w.previous, w.appData, w.live); err != nil {
-		return w.failBeforeMutation(fmt.Errorf("checkpoint current profile: %w", err))
+	if w.previous != "" && w.sessionUsable(w.live) {
+		if err := w.store.CheckpointAt(w.previous, w.appData, w.live); err != nil {
+			return w.failBeforeMutation(fmt.Errorf("checkpoint current profile: %w", err))
+		}
 	}
 	if err := w.store.WipeAt(w.appData, w.live); err != nil {
 		return w.recover(fmt.Errorf("clear session state: %w", err))
@@ -120,6 +150,7 @@ func (w *addWorkflow) Begin(name string) error {
 	w.mu.Lock()
 	w.stage = addWaitingLogin
 	w.mu.Unlock()
+	w.record("waiting", "Claude opened for sign-in")
 	return nil
 }
 
@@ -131,27 +162,84 @@ func (w *addWorkflow) Complete() error {
 	if err := w.claim(addWaitingLogin, addCompleting); err != nil {
 		return err
 	}
-	if !w.sessionUsable(w.live) {
-		return w.recover(errors.New("new Claude session is not ready; log in before finishing"))
+	if !w.loginDetected() {
+		w.resetToWaiting()
+		return errAddLoginNotReady
 	}
-	if err := w.platform.KillApp(); err != nil {
+	existing, err := w.existingAccount()
+	if err != nil {
+		return w.recover(fmt.Errorf("check existing accounts: %w", err))
+	}
+	target := w.name
+	duplicateName := ""
+	if existing != "" && existing != w.name {
+		target = existing
+		duplicateName = existing
+	}
+	if err := w.stopClaude(); err != nil {
 		return w.recover(fmt.Errorf("stop Claude after login: %w", err))
 	}
-	if err := w.store.CheckpointAt(w.name, w.appData, w.live); err != nil {
-		return w.recover(fmt.Errorf("save new profile: %w", err))
+	if !w.waitForUsableSession() {
+		if w.persistenceRetries >= maxPersistenceRetries {
+			return w.recover(errors.New("the new Claude session did not remain usable after Claude closed"))
+		}
+		w.persistenceRetries++
+		if err := w.persistPending(w.pendingState()); err != nil {
+			return w.recover(fmt.Errorf("record account persistence retry: %w", err))
+		}
+		if err := w.platform.LaunchApp(); err != nil {
+			return w.recover(fmt.Errorf("claude did not finish persisting the new session and could not reopen: %w", err))
+		}
+		w.resetToWaiting()
+		w.record("waiting", "Claude reopened to finish persisting the new session")
+		return errAddLoginNotReady
 	}
-	if err := w.store.RestoreAt(w.name, w.appData, w.live); err != nil {
+	if err := w.store.CheckpointAt(target, w.appData, w.live); err != nil {
+		var duplicate *profile.DuplicateAccountError
+		if errors.As(err, &duplicate) {
+			if refreshErr := w.store.CheckpointAt(duplicate.ExistingName, w.appData, w.live); refreshErr != nil {
+				return w.recover(fmt.Errorf("%w; update saved account: %v", err, refreshErr))
+			}
+			target = duplicate.ExistingName
+			duplicateName = duplicate.ExistingName
+		} else {
+			return w.recover(fmt.Errorf("save new profile: %w", err))
+		}
+	}
+	if err := w.store.RestoreAt(target, w.appData, w.live); err != nil {
 		return w.recover(fmt.Errorf("activate new profile: %w", err))
 	}
 	if err := w.platform.LaunchApp(); err != nil {
-		w.stage = addCompleted
+		w.setStage(addCompleted)
 		w.finishLock()
 		_ = w.removePending()
+		w.record("saved", "Profile saved; Claude restart failed")
 		return fmt.Errorf("profile saved but Claude could not restart: %w", err)
 	}
-	w.stage = addCompleted
+	if duplicateName != "" {
+		return w.finishExistingAccount(duplicateName)
+	}
+	w.setStage(addCompleted)
 	w.finishLock()
-	return w.removePending()
+	if err := w.removePending(); err != nil {
+		w.record("saved", "Profile saved; pending marker cleanup failed")
+		return err
+	}
+	w.record("completed", "Profile saved and Claude restarted")
+	return nil
+}
+
+func (w *addWorkflow) finishExistingAccount(name string) error {
+	if err := w.store.SetCurrent(name); err != nil {
+		return w.recover(fmt.Errorf("select existing account: %w", err))
+	}
+	w.setStage(addCompleted)
+	w.finishLock()
+	if err := w.removePending(); err != nil {
+		return err
+	}
+	w.record("duplicate", "Existing profile updated and Claude restarted")
+	return &profile.DuplicateAccountError{ExistingName: name}
 }
 
 func (w *addWorkflow) Cancel() error {
@@ -161,30 +249,123 @@ func (w *addWorkflow) Cancel() error {
 	return w.recover(errAddCancelled)
 }
 
+func (w *addWorkflow) RecoverPendingDuplicate() (bool, error) {
+	if !w.resumed {
+		return false, nil
+	}
+	existing, err := w.existingAccount()
+	if err != nil || existing == "" {
+		return false, err
+	}
+	if w.loginDetected() {
+		return true, w.Complete()
+	}
+	if err := w.claim(addWaitingLogin, addCompleting); err != nil {
+		return true, err
+	}
+	if running, err := w.platform.IsRunning(); err != nil {
+		return true, w.recover(err)
+	} else if running {
+		if err := w.stopClaude(); err != nil {
+			return true, w.recover(fmt.Errorf("stop incomplete Claude login: %w", err))
+		}
+	}
+	if err := w.store.RestoreAt(existing, w.appData, w.live); err != nil {
+		return true, w.recover(fmt.Errorf("restore existing account: %w", err))
+	}
+	if err := w.platform.LaunchApp(); err != nil {
+		return true, w.recover(fmt.Errorf("reopen existing account: %w", err))
+	}
+	return true, w.finishExistingAccount(existing)
+}
+
+func restartLoginProcess(workflow *addWorkflow, p platform.Platform) error {
+	running, err := p.IsRunning()
+	if err != nil {
+		return err
+	}
+	if running {
+		if err := p.KillApp(); err != nil {
+			return err
+		}
+	}
+	if err := workflow.store.WipeAt(workflow.appData, workflow.live); err != nil {
+		return fmt.Errorf("clear incomplete login: %w", err)
+	}
+	if err := p.LaunchApp(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *addWorkflow) ResumePendingLogin() error {
+	if !w.resumed || !w.waiting() {
+		return errors.New("account-add workflow is not waiting to resume")
+	}
+	running, err := w.platform.IsRunning()
+	if err != nil {
+		return w.recover(fmt.Errorf("verify Claude before resuming account login: %w", err))
+	}
+	if running {
+		return nil
+	}
+	w.createdAt = time.Now()
+	w.loginLogOffset = profile.LoginLogOffsetAt(w.appData)
+	if err := w.persistPending(w.pendingState()); err != nil {
+		return w.recover(fmt.Errorf("reset pending login detection: %w", err))
+	}
+	if err := w.platform.LaunchApp(); err != nil {
+		return w.recover(fmt.Errorf("reopen Claude to resume account login: %w", err))
+	}
+	w.record("waiting", "Claude reopened to resume pending sign-in")
+	return nil
+}
+
+func (w *addWorkflow) existingAccount() (string, error) {
+	return w.store.FindByAccountIdentityAt(w.appData)
+}
+
 // WaitAndComplete watches the live Cookies database and completes as soon as
 // Claude has established a usable session. The context lets Ctrl+C or tray
 // shutdown recover the previous account safely.
 func (w *addWorkflow) WaitAndComplete(ctx context.Context) error {
-	if err := w.WaitForLogin(ctx); err != nil {
+	for {
+		if err := w.WaitForLogin(ctx); err != nil {
+			return err
+		}
+		err := w.Complete()
+		if errors.Is(err, errAddLoginNotReady) {
+			continue
+		}
 		return err
 	}
-	return w.Complete()
 }
 
-// WaitForLogin waits until the new live Cookies database contains a usable
-// session, without committing it yet. Tray callers use this phase to show the
-// final green confirmation overlay during the commit/relaunch phase.
+// WaitForLogin waits for stable local account evidence before Claude is
+// stopped and its locked Cookies database can be validated.
 func (w *addWorkflow) WaitForLogin(ctx context.Context) error {
 	interval := w.loginPoll
 	if interval <= 0 {
 		interval = time.Second
 	}
+	var readySince time.Time
+	var readyState string
 	for {
 		if !w.waiting() {
 			return errAddHandled
 		}
-		if w.sessionUsable(w.live) {
-			return nil
+		state := w.loginState()
+		if state != "" {
+			if readySince.IsZero() || state != readyState {
+				readySince = time.Now()
+				readyState = state
+			}
+			if time.Since(readySince) >= w.loginSettle {
+				return nil
+			}
+		} else {
+			readySince = time.Time{}
+			readyState = ""
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -196,10 +377,79 @@ func (w *addWorkflow) WaitForLogin(ctx context.Context) error {
 	}
 }
 
-func (w *addWorkflow) Stage() addStage {
+func (w *addWorkflow) loginReady() bool {
+	return w.sessionUsable != nil && w.sessionUsable(w.live)
+}
+
+func (w *addWorkflow) loginDetected() bool {
+	if w.accountStateReady == nil || !w.accountStateReady(w.appData) {
+		return false
+	}
+	if w.loginReady() {
+		return true
+	}
+	if w.accountLogState != nil {
+		switch w.accountLogState(w.appData, w.loginLogOffset, w.createdAt) {
+		case profile.AccountLogSignedIn:
+			return true
+		case profile.AccountLogSignedOut:
+			return false
+		}
+	}
+	return w.loginEvidence != nil && w.loginEvidence(w.appData, w.live)
+}
+
+func (w *addWorkflow) loginState() string {
+	if !w.loginDetected() || w.accountStateID == nil {
+		return ""
+	}
+	return w.accountStateID(w.appData)
+}
+
+func (w *addWorkflow) persistedSessionReady() bool {
+	return w.loginReady() && w.accountStateReady != nil && w.accountStateReady(w.appData)
+}
+
+func (w *addWorkflow) resetToWaiting() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.stage
+	if w.stage == addCompleting {
+		w.stage = addWaitingLogin
+	}
+	w.mu.Unlock()
+}
+
+func (w *addWorkflow) waitForUsableSession() bool {
+	poll := w.sessionPoll
+	if poll <= 0 {
+		poll = 250 * time.Millisecond
+	}
+	timeout := w.sessionTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if w.persistedSessionReady() {
+			return true
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		time.Sleep(min(poll, remaining))
+	}
+}
+
+func (w *addWorkflow) pendingState() pendingAdd {
+	return pendingAdd{
+		Name:               w.name,
+		Previous:           w.previous,
+		AppData:            w.appData,
+		Live:               w.live,
+		CreatedAt:          w.createdAt,
+		LoginLogOffset:     w.loginLogOffset,
+		PersistenceRetries: w.persistenceRetries,
+	}
 }
 
 func (w *addWorkflow) Name() string { return w.name }
@@ -223,9 +473,41 @@ func (w *addWorkflow) claim(expected, next addStage) error {
 	return nil
 }
 
+func (w *addWorkflow) setStage(stage addStage) {
+	w.mu.Lock()
+	w.stage = stage
+	w.mu.Unlock()
+}
+
+func (w *addWorkflow) stopClaude() error {
+	err := w.platform.KillApp()
+	if err == nil {
+		return nil
+	}
+	running, stateErr := w.platform.IsRunning()
+	if stateErr != nil {
+		return fmt.Errorf("%w; verify Claude state: %v", err, stateErr)
+	}
+	if running {
+		return err
+	}
+	return nil
+}
+
+func (w *addWorkflow) record(state, detail string) {
+	if w.diagnostic != nil {
+		w.diagnostic(w.name, state, detail)
+	}
+}
+
 func (w *addWorkflow) failBeforeMutation(err error) error {
 	if w.stopped {
 		return w.recover(err)
+	}
+	if running, stateErr := w.platform.IsRunning(); stateErr == nil && !running {
+		if launchErr := w.platform.LaunchApp(); launchErr != nil {
+			err = fmt.Errorf("%w; previous Claude session could not reopen: %v", err, launchErr)
+		}
 	}
 	w.mu.Lock()
 	w.stage = addCancelled
@@ -241,7 +523,7 @@ func newPendingAddWorkflow(store addStore, p platform.Platform) (*addWorkflow, e
 	if err != nil {
 		return nil, err
 	}
-	if pending.Name == "" || pending.Previous == "" {
+	if pending.Name == "" {
 		return nil, errors.New("pending account-add state is incomplete")
 	}
 	appData, err := p.AppDataPath()
@@ -253,32 +535,65 @@ func newPendingAddWorkflow(store addStore, p platform.Platform) (*addWorkflow, e
 		return nil, err
 	}
 	return &addWorkflow{
-		store:          store,
-		platform:       p,
-		appData:        appData,
-		live:           platform.CookiesPath(appData),
-		name:           pending.Name,
-		previous:       pending.Previous,
-		stage:          addWaitingLogin,
-		lock:           lock,
-		sessionUsable:  profile.HasActiveSessionAt,
-		persistPending: writePendingAdd,
-		removePending:  clearPendingAdd,
-		loginPoll:      time.Second,
+		store:              store,
+		platform:           p,
+		appData:            appData,
+		live:               platform.CookiesPath(appData),
+		name:               pending.Name,
+		previous:           pending.Previous,
+		stage:              addWaitingLogin,
+		resumed:            true,
+		lock:               lock,
+		sessionUsable:      profile.HasActiveSessionAt,
+		loginEvidence:      profile.HasLoginEvidenceAt,
+		accountLogState:    profile.LatestAccountLogStateSince,
+		accountStateReady:  profile.HasPersistedAccountStateAt,
+		accountStateID:     profile.PersistedAccountStateFingerprintAt,
+		persistPending:     writePendingAdd,
+		removePending:      clearPendingAdd,
+		diagnostic:         writeAddDiagnostic,
+		loginPoll:          time.Second,
+		loginSettle:        3 * time.Second,
+		sessionPoll:        250 * time.Millisecond,
+		sessionTimeout:     2 * time.Second,
+		createdAt:          pending.CreatedAt,
+		loginLogOffset:     pending.LoginLogOffset,
+		persistenceRetries: pending.PersistenceRetries,
 	}, nil
 }
 
 func (w *addWorkflow) recover(cause error) error {
-	if running, err := w.platform.IsRunning(); err == nil && running {
-		_ = w.platform.KillApp()
+	running, stateErr := w.platform.IsRunning()
+	if stateErr != nil {
+		w.setStage(addCancelled)
+		w.finishLock()
+		w.record("recovery-failed", stateErr.Error())
+		return fmt.Errorf("%w; recovery could not verify whether Claude is closed: %v", cause, stateErr)
 	}
-	restoreErr := w.store.RestoreAt(w.previous, w.appData, w.live)
+	if running {
+		if stopErr := w.stopClaude(); stopErr != nil {
+			w.setStage(addCancelled)
+			w.finishLock()
+			w.record("recovery-failed", stopErr.Error())
+			return fmt.Errorf("%w; recovery could not safely stop Claude: %v", cause, stopErr)
+		}
+	}
+	var restoreErr error
+	if w.previous == "" {
+		restoreErr = w.store.WipeAt(w.appData, w.live)
+	} else {
+		restoreErr = w.store.RestoreAt(w.previous, w.appData, w.live)
+	}
 	launchErr := w.platform.LaunchApp()
 	w.mu.Lock()
 	w.stage = addCancelled
 	w.mu.Unlock()
 	w.finishLock()
 	_ = w.removePending()
+	w.record("recovered", cause.Error())
+	if restoreErr != nil && w.previous == "" {
+		return fmt.Errorf("%w; clear incomplete first account: %v", cause, restoreErr)
+	}
 	if restoreErr != nil {
 		return fmt.Errorf("%w; restore previous profile: %v", cause, restoreErr)
 	}

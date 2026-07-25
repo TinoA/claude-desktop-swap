@@ -3,9 +3,12 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
 )
@@ -95,16 +98,84 @@ func TestSwitchProfileRestoresCurrentProfileWhenLiveCookiesAreMissing(t *testing
 	}
 }
 
-func TestSwitchProfileCheckpointsWhenClaudeIsClosed(t *testing.T) {
+func TestSwitchProfileRestoresDirectlyWhenClaudeIsClosed(t *testing.T) {
 	events := []string{}
 	store := &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable}
 	p := &fakePlatform{events: &events, appData: t.TempDir()}
 	if err := switchProfileWith("incoming", store, p, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"app-data", "inspect:incoming", "current", "checkpoint:outgoing", "restore:incoming", "launch"}
+	want := []string{"app-data", "inspect:incoming", "restore:incoming", "launch"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestSwitchProfileDoesNotReportSuccessAfterClaudeLogsOut(t *testing.T) {
+	events := []string{}
+	appData := t.TempDir()
+	store := &fakeVerifiedSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		identity:        "incoming",
+	}
+	p := &fakePlatform{
+		events:  &events,
+		appData: appData,
+		launchHook: func() {
+			logs := filepath.Join(appData, "logs")
+			if err := os.MkdirAll(logs, 0700); err != nil {
+				t.Fatal(err)
+			}
+			line := time.Now().Format("2006-01-02 15:04:05") + " [info] [account] User logged out during IPC wait\n"
+			if err := os.WriteFile(filepath.Join(logs, "main.log"), []byte(line), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	var output bytes.Buffer
+	err := switchProfileWith("incoming", store, p, &output)
+	if err == nil || !strings.Contains(err.Error(), "did not remain signed in") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(output.String(), "Switched to") {
+		t.Fatalf("success was reported after logout: %q", output.String())
+	}
+}
+
+func TestSwitchProfileReportsSuccessAfterStableSignedInStartup(t *testing.T) {
+	events := []string{}
+	appData := t.TempDir()
+	store := &fakeVerifiedSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		identity:        "incoming",
+	}
+	p := &fakePlatform{
+		events:  &events,
+		appData: appData,
+		launchHook: func() {
+			if err := os.WriteFile(
+				filepath.Join(appData, "config.json"),
+				[]byte(`{"oauth:tokenCache":"djEwYQ==","lastKnownAccountUuid":"account-id"}`),
+				0600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			logs := filepath.Join(appData, "logs")
+			if err := os.MkdirAll(logs, 0700); err != nil {
+				t.Fatal(err)
+			}
+			line := time.Now().Format("2006-01-02 15:04:05") + " [info] claude.ai account active and logged in\n"
+			if err := os.WriteFile(filepath.Join(logs, "main.log"), []byte(line), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	var output bytes.Buffer
+	if err := switchProfileWith("incoming", store, p, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `Switched to "incoming"`) {
+		t.Fatalf("success was not reported: %q", output.String())
 	}
 }
 
@@ -162,45 +233,37 @@ func TestSwitchProfileDoesNotCheckpointMissingLiveSession(t *testing.T) {
 	}
 }
 
-func TestSwitchProfileUpdatesConfirmedUnrecognizedSessionBeforeSwitch(t *testing.T) {
+func TestSwitchProfileNeverOverwritesUnrecognizedSession(t *testing.T) {
 	events := []string{}
 	store := &fakeLiveSwitchStore{
 		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
 		liveHealth:      profile.HealthUsable,
 	}
 	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
-	confirmed := false
-	err := switchProfileWith("incoming", store, p, &bytes.Buffer{}, func(current, target string) bool {
-		confirmed = current == "outgoing" && target == "incoming"
-		return confirmed
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !confirmed {
-		t.Fatal("unrecognized session update was not confirmed")
-	}
-	if !containsEvent(events, "checkpoint:outgoing") || !containsEvent(events, "restore:incoming") {
-		t.Fatalf("confirmed session was not preserved before switch: %v", events)
-	}
-}
-
-func TestSwitchProfilePreservesUnrecognizedSessionWhenConfirmationIsDeclined(t *testing.T) {
-	events := []string{}
-	store := &fakeLiveSwitchStore{
-		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
-		liveHealth:      profile.HealthUsable,
-	}
-	p := &fakePlatform{events: &events, appData: t.TempDir(), running: true}
-	err := switchProfileWith("incoming", store, p, &bytes.Buffer{}, func(_, _ string) bool { return false })
-	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+	err := switchProfileWith("incoming", store, p, &bytes.Buffer{})
+	if !errors.Is(err, errLiveSessionUnrecognized) {
 		t.Fatalf("error = %v", err)
 	}
 	if containsEvent(events, "checkpoint:outgoing") || containsEvent(events, "restore:incoming") {
-		t.Fatalf("declined session was modified: %v", events)
+		t.Fatalf("unrecognized session was modified: %v", events)
 	}
 	if !containsEvent(events, "launch") {
 		t.Fatalf("previous Claude session was not relaunched: %v", events)
+	}
+}
+
+func TestResolveLiveProfileIdentityReconcilesRecognizedSession(t *testing.T) {
+	events := []string{}
+	store := &fakeVerifiedSwitchStore{
+		fakeSwitchStore: &fakeSwitchStore{events: &events, exists: true, current: "outgoing", health: profile.HealthUsable},
+		identity:        "outgoing",
+	}
+	name, err := resolveLiveProfileIdentity(store, t.TempDir(), "", profile.HealthUsable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "outgoing" {
+		t.Fatalf("identity match = %q, want outgoing", name)
 	}
 }
 
@@ -217,6 +280,16 @@ type fakeLiveSwitchStore struct {
 	*fakeSwitchStore
 	liveName   string
 	liveHealth profile.Health
+}
+
+type fakeVerifiedSwitchStore struct {
+	*fakeSwitchStore
+	identity    string
+	identityErr error
+}
+
+func (s *fakeVerifiedSwitchStore) FindByAccountIdentityAt(string) (string, error) {
+	return s.identity, s.identityErr
 }
 
 func (s *fakeLiveSwitchStore) MatchLiveAt(string) (string, profile.Health) {
@@ -251,6 +324,7 @@ type fakePlatform struct {
 	appDataErr error
 	running    bool
 	launchErr  error
+	launchHook func()
 }
 
 func (p *fakePlatform) AppDataPath() (string, error) {
@@ -259,8 +333,21 @@ func (p *fakePlatform) AppDataPath() (string, error) {
 }
 func (p *fakePlatform) IsRunning() (bool, error) { return p.running, nil }
 func (p *fakePlatform) IsInstalled() bool        { return p.appDataErr == nil }
-func (p *fakePlatform) KillApp() error           { *p.events = append(*p.events, "stop"); return nil }
-func (p *fakePlatform) LaunchApp() error         { *p.events = append(*p.events, "launch"); return p.launchErr }
+func (p *fakePlatform) KillApp() error {
+	*p.events = append(*p.events, "stop")
+	p.running = false
+	return nil
+}
+func (p *fakePlatform) LaunchApp() error {
+	*p.events = append(*p.events, "launch")
+	if p.launchErr == nil {
+		p.running = true
+		if p.launchHook != nil {
+			p.launchHook()
+		}
+	}
+	return p.launchErr
+}
 
 func containsEvent(events []string, event string) bool {
 	for _, got := range events {

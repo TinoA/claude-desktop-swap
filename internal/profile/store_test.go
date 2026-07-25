@@ -3,6 +3,7 @@ package profile
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-func TestCheckpointCreatesSecureV3ProfileWithAccountState(t *testing.T) {
+func TestCheckpointCreatesSecureV4ProfileWithAccountState(t *testing.T) {
 	appData := syntheticAppData(t, "live")
 	store := newTestStore(t)
 	if err := store.Checkpoint("work", appData); err != nil {
@@ -22,11 +23,12 @@ func TestCheckpointCreatesSecureV3ProfileWithAccountState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := entryNames(entries); len(got) != 5 || got[0] != cookiesFile || got[1] != indexedDBDir || got[2] != localStorageDir || got[3] != sessionStorageDir || got[4] != metaFile {
+	if got := entryNames(entries); len(got) != 6 || got[0] != cookiesFile || got[1] != indexedDBDir || got[2] != localStorageDir || got[3] != sessionStorageDir || got[4] != accountStateFile || got[5] != metaFile {
 		t.Fatalf("profile artifacts = %v, want complete account state", got)
 	}
 	assertMode(t, store.profileDir("work"), dirPerm)
 	assertMode(t, filepath.Join(store.profileDir("work"), cookiesFile), filePerm)
+	assertMode(t, filepath.Join(store.profileDir("work"), accountStateFile), filePerm)
 	assertMode(t, filepath.Join(store.profileDir("work"), metaFile), filePerm)
 	snapshot := filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir, "CURRENT")
 	assertMode(t, filepath.Join(store.profileDir("work"), localStorageDir, leveldbDir), dirPerm)
@@ -37,8 +39,295 @@ func TestCheckpointCreatesSecureV3ProfileWithAccountState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.FormatVersion != 3 || meta.ObservedHealth != HealthUsable || meta.CookieDigest == "" || meta.SavedAt.IsZero() {
-		t.Fatalf("incomplete v3 metadata: %+v", meta)
+	if meta.FormatVersion != formatVersion || meta.ObservedHealth != HealthUsable || meta.CookieDigest == "" || meta.AccountStateDigest == "" || meta.SavedAt.IsZero() {
+		t.Fatalf("incomplete v4 metadata: %+v", meta)
+	}
+}
+
+func TestCheckpointStoresEmailAndPrimaryAccountIdentityFromSnapshot(t *testing.T) {
+	store := newTestStore(t)
+	appData := syntheticAppData(t, "saved")
+	accountID := "11111111-1111-4111-8111-111111111111"
+	setLocalIdentity(t, appData, "Person@Example.Test", accountID)
+	writeAccountFixture(t, appData, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+
+	if err := store.Checkpoint("work", appData); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Email != "person@example.test" {
+		t.Fatalf("Email = %q", meta.Email)
+	}
+	if meta.AccountUUIDHash != identityHash([]byte(accountID)) || strings.Contains(meta.AccountUUIDHash, accountID) {
+		t.Fatalf("unsafe primary account identity = %q", meta.AccountUUIDHash)
+	}
+}
+
+func TestCheckpointRejectsDuplicatePrimaryAccountWithoutCreatingProfile(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	first := syntheticAppData(t, "first-session")
+	writeAccountFixture(t, first, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("first", first); err != nil {
+		t.Fatal(err)
+	}
+
+	second := syntheticAppData(t, "renewed-session")
+	writeAccountFixture(t, second, "token-b", "token-v2-b", accountID, accountID, "light", true)
+	err := store.Checkpoint("second", second)
+	var duplicate *DuplicateAccountError
+	if !errors.As(err, &duplicate) || duplicate.ExistingName != "first" {
+		t.Fatalf("Checkpoint error = %v", err)
+	}
+	if store.Exists("second") {
+		t.Fatal("duplicate profile was created")
+	}
+}
+
+func TestFindByAccountIdentityAtMatchesRenewedLiveSession(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "saved-session")
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("first", saved); err != nil {
+		t.Fatal(err)
+	}
+
+	renewed := syntheticAppData(t, "renewed-session")
+	writeAccountFixture(t, renewed, "token-b", "token-v2-b", accountID, accountID, "light", true)
+	if name, err := store.FindByAccountIdentityAt(renewed); err != nil || name != "first" {
+		t.Fatalf("FindByAccountIdentityAt = %q, %v", name, err)
+	}
+
+	other := syntheticAppData(t, "other-session")
+	writeAccountFixture(t, other, "token-c", "token-v2-c", "other-account", "other-account", "dark", true)
+	if name, err := store.FindByAccountIdentityAt(other); err != nil || name != "" {
+		t.Fatalf("different account match = %q, %v", name, err)
+	}
+}
+
+func TestFindByAccountIdentityAtRejectsAmbiguousProfiles(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "saved-session")
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("first", saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyDir(store.profileDir("first"), store.profileDir("second")); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Name = "second"
+	if err := store.saveMeta("second", meta); err != nil {
+		t.Fatal(err)
+	}
+
+	renewed := syntheticAppData(t, "renewed-session")
+	writeAccountFixture(t, renewed, "token-b", "token-v2-b", accountID, accountID, "light", true)
+	if name, err := store.FindByAccountIdentityAt(renewed); err != nil || name != "" {
+		t.Fatalf("ambiguous identity match = %q, %v", name, err)
+	}
+}
+
+func TestMatchLiveAtResolvesIdentityAboveNetworkCookies(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "saved-session")
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("personal", saved); err != nil {
+		t.Fatal(err)
+	}
+
+	live := syntheticAppData(t, "renewed-session")
+	writeAccountFixture(t, live, "token-b", "token-v2-b", accountID, accountID, "light", true)
+	network := filepath.Join(live, "Network")
+	if err := os.MkdirAll(network, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	networkCookies := filepath.Join(network, cookiesFile)
+	if err := os.Rename(filepath.Join(live, cookiesFile), networkCookies); err != nil {
+		t.Fatal(err)
+	}
+
+	if name, health := store.MatchLiveAt(networkCookies); name != "personal" || health != HealthUsable {
+		t.Fatalf("MatchLiveAt(Network/Cookies) = %q/%s, want personal/usable", name, health)
+	}
+}
+
+func TestUpdateAccountEmailFromLiveRequiresMatchingPrimaryIdentity(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "saved-session")
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("first", saved); err != nil {
+		t.Fatal(err)
+	}
+
+	other := syntheticAppData(t, "other-session")
+	setLocalIdentity(t, other, "wrong@example.test", "other-account")
+	writeAccountFixture(t, other, "token-b", "token-v2-b", "other-account", "other-account", "light", true)
+	if _, err := store.UpdateAccountEmailFromLive("first", other); err == nil {
+		t.Fatal("email was updated from a different account")
+	}
+
+	live := syntheticAppData(t, "renewed-session")
+	setLocalIdentity(t, live, "Person@Example.Test", accountID)
+	writeAccountFixture(t, live, "token-c", "token-v2-c", accountID, accountID, "light", true)
+	email, err := store.UpdateAccountEmailFromLive("first", live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if email != "person@example.test" {
+		t.Fatalf("email = %q", email)
+	}
+	meta, err := store.loadMeta("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Email != email || !meta.EmailLookupDone || len(meta.IdentityHashes) != 1 {
+		t.Fatalf("updated metadata = %+v", meta)
+	}
+}
+
+func TestCheckpointRejectsDuplicateSessionWhenPrimaryIdentityIsUnavailable(t *testing.T) {
+	store := newTestStore(t)
+	first := syntheticAppData(t, "same-session")
+	if err := store.Checkpoint("first", first); err != nil {
+		t.Fatal(err)
+	}
+	second := syntheticAppData(t, "same-session")
+	err := store.Checkpoint("second", second)
+	var duplicate *DuplicateAccountError
+	if !errors.As(err, &duplicate) || duplicate.ExistingName != "first" {
+		t.Fatalf("Checkpoint error = %v", err)
+	}
+	if store.Exists("second") {
+		t.Fatal("duplicate session profile was created")
+	}
+}
+
+func TestCheckpointPrimaryIdentityAllowsDifferentAccounts(t *testing.T) {
+	store := newTestStore(t)
+	first := syntheticAppData(t, "first-session")
+	second := syntheticAppData(t, "second-session")
+	sharedUUIDs := []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"}
+	setLocalIdentity(t, first, "same@example.test", sharedUUIDs...)
+	setLocalIdentity(t, second, "same@example.test", sharedUUIDs...)
+	writeAccountFixture(t, first, "token-a", "token-v2-a", "account-a", "owner-a", "dark", true)
+	writeAccountFixture(t, second, "token-b", "token-v2-b", "account-b", "owner-b", "light", true)
+
+	if err := store.Checkpoint("first", first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Checkpoint("second", second); err != nil {
+		t.Fatalf("different primary account was rejected: %v", err)
+	}
+}
+
+func TestBackfillAccountMetadataRecoversLegacyLabelAndPrimaryIdentity(t *testing.T) {
+	store := newTestStore(t)
+	appData := syntheticAppData(t, "saved")
+	accountID := "11111111-1111-4111-8111-111111111111"
+	setLocalIdentity(t, appData, "person@example.test", accountID)
+	writeAccountFixture(t, appData, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("work", appData); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Email = ""
+	meta.EmailLookupDone = false
+	meta.AccountUUIDHash = ""
+	if err := store.saveMeta("work", meta); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err = store.BackfillAccountMetadata("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Email != "person@example.test" || meta.AccountUUIDHash != identityHash([]byte(accountID)) {
+		t.Fatalf("backfilled metadata = %+v", meta)
+	}
+}
+
+func TestBackfillAccountMetadataMarksUnavailableEmailAsChecked(t *testing.T) {
+	store := newTestStore(t)
+	appData := syntheticAppData(t, "saved")
+	accountID := "11111111-1111-4111-8111-111111111111"
+	writeAccountFixture(t, appData, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("work", appData); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.EmailLookupDone = false
+	if err := store.saveMeta("work", meta); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err = store.BackfillAccountMetadata("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Email != "" || !meta.EmailLookupDone {
+		t.Fatalf("email discovery state = %q/%v", meta.Email, meta.EmailLookupDone)
+	}
+}
+
+func TestCheckpointRequiresExplicitMetadataUpdateForChangedEmail(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "old-session")
+	setLocalIdentity(t, saved, "old@example.test", accountID)
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("work", saved); err != nil {
+		t.Fatal(err)
+	}
+
+	renewed := syntheticAppData(t, "renewed-session")
+	setLocalIdentity(t, renewed, "new@example.test", accountID)
+	writeAccountFixture(t, renewed, "token-b", "token-v2-b", accountID, accountID, "light", true)
+	if err := store.Checkpoint("work", renewed); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.loadMeta("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Email != "old@example.test" || !store.IdentityEmailChangedAt("work", filepath.Join(renewed, cookiesFile)) {
+		t.Fatalf("email change confirmation was bypassed: %+v", meta)
+	}
+	if email, err := store.UpdateAccountEmailFromProfile("work"); err != nil || email != "new@example.test" {
+		t.Fatalf("UpdateAccountEmailFromProfile = %q/%v", email, err)
+	}
+	if store.IdentityEmailChangedAt("work", filepath.Join(renewed, cookiesFile)) {
+		t.Fatal("confirmed email update remains pending")
+	}
+}
+
+func TestCheckpointRecreatesDeletedStoreDirectory(t *testing.T) {
+	store := newTestStore(t)
+	appData := syntheticAppData(t, "live")
+	if err := os.RemoveAll(store.baseDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Checkpoint("work", appData); err != nil {
+		t.Fatalf("Checkpoint after store deletion: %v", err)
+	}
+	if !store.Exists("work") {
+		t.Fatal("profile was not recreated")
 	}
 }
 
@@ -152,7 +441,7 @@ func TestHealthyV1RestoresAndMigratesOnlyOnCheckpoint(t *testing.T) {
 		t.Fatal("legacy payload remains after v2 commit")
 	}
 	meta, _ := store.loadMeta("legacy")
-	if meta.FormatVersion != 3 {
+	if meta.FormatVersion != formatVersion {
 		t.Fatalf("format version = %d", meta.FormatVersion)
 	}
 }
@@ -198,6 +487,96 @@ func TestStoreRecoversBackupAndRemovesOrphanStage(t *testing.T) {
 	}
 }
 
+func TestDeleteCurrentProfileClearsTrackingAndTemporaryData(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.Checkpoint("work", syntheticAppData(t, "delete-current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCurrent("work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("work"); err != nil {
+		t.Fatal(err)
+	}
+	if store.Exists("work") {
+		t.Fatal("deleted profile still exists")
+	}
+	if _, err := store.Current(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("current marker error = %v, want not exist", err)
+	}
+	deletedPath := filepath.Join(store.profilesPath(), ".work"+deleteSuffix)
+	if _, err := os.Stat(deletedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary deletion path still exists: %v", err)
+	}
+}
+
+func TestDeletePreservesProfileWhenCurrentMarkerCannotBeRead(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.Checkpoint("work", syntheticAppData(t, "delete-marker-error")); err != nil {
+		t.Fatal(err)
+	}
+	currentPath := filepath.Join(store.baseDir, currentFileName)
+	if err := os.Mkdir(currentPath, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("work"); err == nil {
+		t.Fatal("delete succeeded with an unreadable current marker")
+	}
+	if !store.Exists("work") {
+		t.Fatal("profile was changed despite the marker read error")
+	}
+}
+
+func TestStoreRollsBackInterruptedCurrentProfileDeletion(t *testing.T) {
+	base := t.TempDir()
+	profiles := filepath.Join(base, profilesDirName)
+	deletedPath := filepath.Join(profiles, ".work"+deleteSuffix)
+	if err := os.MkdirAll(deletedPath, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(deletedPath, metaFile), `{}`)
+	mustWriteFile(t, filepath.Join(base, currentFileName), "work")
+
+	store, err := newStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.Exists("work") {
+		t.Fatal("interrupted current-profile deletion was not rolled back")
+	}
+	if _, err := os.Stat(deletedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary deletion path still exists: %v", err)
+	}
+	if current, err := store.Current(); err != nil || current != "work" {
+		t.Fatalf("current = %q/%v, want work", current, err)
+	}
+}
+
+func TestStoreCompletesInterruptedInactiveProfileDeletion(t *testing.T) {
+	base := t.TempDir()
+	profiles := filepath.Join(base, profilesDirName)
+	deletedPath := filepath.Join(profiles, ".work"+deleteSuffix)
+	if err := os.MkdirAll(deletedPath, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(deletedPath, metaFile), `{}`)
+	mustWriteFile(t, filepath.Join(base, currentFileName), "other")
+
+	store, err := newStore(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Exists("work") {
+		t.Fatal("interrupted inactive-profile deletion was rolled back")
+	}
+	if _, err := os.Stat(deletedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary deletion path still exists: %v", err)
+	}
+	if current, err := store.Current(); err != nil || current != "other" {
+		t.Fatalf("current = %q/%v, want other", current, err)
+	}
+}
+
 func TestRestoreReplacesCompleteAccountStateAndPreservesGlobalState(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "saved")
@@ -214,10 +593,11 @@ func TestRestoreReplacesCompleteAccountStateAndPreservesGlobalState(t *testing.T
 	for _, name := range []string{cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
 		mustWriteFile(t, filepath.Join(live, name), "stale")
 	}
-	global := map[string]string{"config.json": "global", "WebStorage/state": "web", "partitions/p": "partition", deviceIDFile: "machine"}
+	global := map[string]string{"WebStorage/state": "web", "partitions/p": "partition", deviceIDFile: "machine"}
 	for path, content := range global {
 		mustWriteFile(t, filepath.Join(live, path), content)
 	}
+	mustWriteFile(t, filepath.Join(live, claudeConfigFile), `{"global":"keep"}`)
 
 	if err := store.Restore("work", live); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -251,6 +631,11 @@ func TestRestoreReplacesCompleteAccountStateAndPreservesGlobalState(t *testing.T
 			t.Fatalf("global %s changed: %q %v", path, got, err)
 		}
 	}
+	config, _, err := readJSONObject(filepath.Join(live, claudeConfigFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONString(t, config, "global", "keep")
 }
 
 func TestRestoreWithoutSnapshotLeavesAccountStateCleared(t *testing.T) {
@@ -274,11 +659,15 @@ func TestRestoreWithoutSnapshotLeavesAccountStateCleared(t *testing.T) {
 func TestRestoreTrackingFailureRollsBackCookies(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "saved")
+	writeAccountFixture(t, saved, "saved-token", "saved-token-v2", "saved-account", "saved-owner", "saved-theme", true)
 	if err := store.Checkpoint("work", saved); err != nil {
 		t.Fatal(err)
 	}
 	live := syntheticAppData(t, "live")
+	writeAccountFixture(t, live, "live-token", "live-token-v2", "live-account", "live-owner", "live-theme", true)
 	before, _ := cookieDigest(filepath.Join(live, cookiesFile))
+	configBefore, _ := os.ReadFile(filepath.Join(live, claudeConfigFile))
+	coworkBefore, _ := os.ReadFile(filepath.Join(live, coworkOpsFile))
 	localPath := filepath.Join(live, localStorageDir, leveldbDir, "CURRENT")
 	localBefore, _ := os.ReadFile(localPath)
 	indexedPath := filepath.Join(live, indexedDBDir, "data")
@@ -308,11 +697,17 @@ func TestRestoreTrackingFailureRollsBackCookies(t *testing.T) {
 	if string(sessionAfter) != string(sessionBefore) {
 		t.Fatal("live Session Storage was not rolled back")
 	}
+	configAfter, _ := os.ReadFile(filepath.Join(live, claudeConfigFile))
+	coworkAfter, _ := os.ReadFile(filepath.Join(live, coworkOpsFile))
+	if string(configAfter) != string(configBefore) || string(coworkAfter) != string(coworkBefore) {
+		t.Fatal("live account configuration was not rolled back")
+	}
 }
 
 func TestRestoreFailureRemovesNewAccountStateWhenLiveHadNone(t *testing.T) {
 	store := newTestStore(t)
 	saved := syntheticAppData(t, "saved")
+	writeAccountFixture(t, saved, "saved-token", "saved-token-v2", "saved-account", "saved-owner", "saved-theme", true)
 	if err := store.Checkpoint("work", saved); err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +728,11 @@ func TestRestoreFailureRemovesNewAccountStateWhenLiveHadNone(t *testing.T) {
 	for _, path := range []string{filepath.Join(localStorageDir, leveldbDir), indexedDBDir, sessionStorageDir} {
 		if _, err := os.Stat(filepath.Join(live, path)); !os.IsNotExist(err) {
 			t.Fatalf("new account state remains after rollback: %s", path)
+		}
+	}
+	for _, path := range []string{claudeConfigFile, coworkOpsFile} {
+		if _, err := os.Stat(filepath.Join(live, path)); !os.IsNotExist(err) {
+			t.Fatalf("new account configuration remains after rollback: %s", path)
 		}
 	}
 }
@@ -379,6 +779,124 @@ func TestMatchLiveRecognizesRenewedSessionByLocalIdentity(t *testing.T) {
 	setLocalIdentity(t, differentAccount, "other@example.test", "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333")
 	if name, health := store.MatchLive(differentAccount); name != "" || health != HealthUsable {
 		t.Fatalf("match = %q/%s, want different usable account", name, health)
+	}
+}
+
+func TestMatchLiveRecognizesRenewedSessionByPrimaryAccountIdentity(t *testing.T) {
+	store := newTestStore(t)
+	accountID := "11111111-1111-4111-8111-111111111111"
+	saved := syntheticAppData(t, "old-session")
+	writeAccountFixture(t, saved, "token-a", "token-v2-a", accountID, accountID, "dark", true)
+	if err := store.Checkpoint("personal", saved); err != nil {
+		t.Fatal(err)
+	}
+	live := syntheticAppData(t, "renewed-session")
+	writeAccountFixture(t, live, "token-b", "token-v2-b", accountID, accountID, "light", true)
+
+	if name, health := store.MatchLive(live); name != "personal" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want personal/usable", name, health)
+	}
+}
+
+func TestHasLoginEvidenceAtAcceptsAccountIdentityWithoutReadableCookies(t *testing.T) {
+	appData := t.TempDir()
+	setLocalIdentity(t, appData, "person@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if !HasLoginEvidenceAt(appData, filepath.Join(appData, cookiesFile)) {
+		t.Fatal("complete local account identity should be accepted as login evidence")
+	}
+}
+
+func TestHasLoginEvidenceAtRejectsIncompleteIdentity(t *testing.T) {
+	appData := t.TempDir()
+	setLocalIdentity(t, appData, "", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+	if HasLoginEvidenceAt(appData, filepath.Join(appData, cookiesFile)) {
+		t.Fatal("identity without an email should not be accepted as login evidence")
+	}
+}
+
+func TestAccountEmailAtReturnsSingleLocalAccountEmail(t *testing.T) {
+	appData := t.TempDir()
+	setLocalIdentity(t, appData, "Person@Example.Test", "11111111-1111-4111-8111-111111111111")
+	if got := AccountEmailAt(appData); got != "person@example.test" {
+		t.Fatalf("AccountEmailAt = %q", got)
+	}
+}
+
+func TestAccountEmailAtReadsLocalStorageFallback(t *testing.T) {
+	appData := t.TempDir()
+	mustWriteFile(t, filepath.Join(appData, localStorageDir, leveldbDir, "state.log"), "11111111-1111-4111-8111-111111111111 emailAddress=person@example.test")
+	if got := AccountEmailAt(appData); got != "person@example.test" {
+		t.Fatalf("Local Storage AccountEmailAt = %q", got)
+	}
+}
+
+func TestAccountEmailAtIgnoresEmailOutsideAccountRecord(t *testing.T) {
+	appData := t.TempDir()
+	data := "email_address 11111111-1111-4111-8111-111111111111 person@example.test\x00" + strings.Repeat("x", identityRecordWindow*2) + "\x00stale@example.test"
+	mustWriteFile(t, filepath.Join(appData, indexedDBDir, "state"), data)
+	if got := AccountEmailAt(appData); got != "person@example.test" {
+		t.Fatalf("AccountEmailAt with unrelated stale email = %q", got)
+	}
+}
+
+func TestAccountEmailAtRejectsMarkerWithoutAccountIdentity(t *testing.T) {
+	appData := t.TempDir()
+	mustWriteFile(t, filepath.Join(appData, indexedDBDir, "state"), "email_address=stale@example.test")
+	if got := AccountEmailAt(appData); got != "" {
+		t.Fatalf("AccountEmailAt without account UUID = %q", got)
+	}
+}
+
+func TestAccountEmailAtRejectsAmbiguousOrUnmarkedData(t *testing.T) {
+	appData := t.TempDir()
+	mustWriteFile(t, filepath.Join(appData, indexedDBDir, "ambiguous"), "account_profile 11111111-1111-4111-8111-111111111111 email_address=one@example.test other@example.test")
+	if got := AccountEmailAt(appData); got != "" {
+		t.Fatalf("ambiguous AccountEmailAt = %q", got)
+	}
+	unmarked := t.TempDir()
+	mustWriteFile(t, filepath.Join(unmarked, indexedDBDir, "cache"), "person@example.test")
+	if got := AccountEmailAt(unmarked); got != "" {
+		t.Fatalf("unmarked AccountEmailAt = %q", got)
+	}
+}
+
+func TestLatestAccountLogStateUsesLastStartupState(t *testing.T) {
+	appData := t.TempDir()
+	logs := filepath.Join(appData, "logs")
+	if err := os.MkdirAll(logs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(logs, "main.log")
+	offset := LoginLogOffsetAt(appData)
+	startedAt := time.Date(2026, 7, 23, 20, 58, 45, 0, time.Local)
+	data := strings.Join([]string{
+		"2026-07-23 20:58:47 [info] claude.ai account active and logged in",
+		"2026-07-23 20:58:47 [info] [account] User logged out during IPC wait, stopping early",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LatestAccountLogStateSince(appData, offset, startedAt); got != AccountLogSignedOut {
+		t.Fatalf("account log state = %v, want signed out", got)
+	}
+}
+
+func TestLatestAccountLogStateAcceptsStableSignedInStartup(t *testing.T) {
+	appData := t.TempDir()
+	logs := filepath.Join(appData, "logs")
+	if err := os.MkdirAll(logs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 7, 23, 20, 58, 45, 0, time.Local)
+	if err := os.WriteFile(
+		filepath.Join(logs, "main.log"),
+		[]byte("2026-07-23 20:58:47 [info] claude.ai account active and logged in\n"),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := LatestAccountLogStateSince(appData, 0, startedAt); got != AccountLogSignedIn {
+		t.Fatalf("account log state = %v, want signed in", got)
 	}
 }
 
@@ -430,6 +948,7 @@ func TestMatchLiveRejectsAmbiguousLocalIdentity(t *testing.T) {
 	for _, name := range []string{"first", "second"} {
 		appData := syntheticAppData(t, name+"-session")
 		setLocalIdentity(t, appData, "shared@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+		writeAccountFixture(t, appData, "token-"+name, "token-v2-"+name, "account-"+name, "owner-"+name, "dark", true)
 		if err := store.Checkpoint(name, appData); err != nil {
 			t.Fatal(err)
 		}
@@ -442,10 +961,31 @@ func TestMatchLiveRejectsAmbiguousLocalIdentity(t *testing.T) {
 	}
 }
 
+func TestMatchLivePrefersTrackedCurrentProfileWhenIdentityIsAmbiguous(t *testing.T) {
+	store := newTestStore(t)
+	for _, name := range []string{"first", "second"} {
+		appData := syntheticAppData(t, name+"-session")
+		setLocalIdentity(t, appData, "shared@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+		writeAccountFixture(t, appData, "token-"+name, "token-v2-"+name, "account-"+name, "owner-"+name, "dark", true)
+		if err := store.Checkpoint(name, appData); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SetCurrent("second"); err != nil {
+		t.Fatal(err)
+	}
+	live := syntheticAppData(t, "renewed-session")
+	setLocalIdentity(t, live, "shared@example.test", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222")
+
+	if name, health := store.MatchLive(live); name != "second" || health != HealthUsable {
+		t.Fatalf("match = %q/%s, want second/usable", name, health)
+	}
+}
+
 func TestWipePreservesMachineAndGlobalFiles(t *testing.T) {
 	store := newTestStore(t)
 	appData := syntheticAppData(t, "live")
-	for path, content := range map[string]string{deviceIDFile: "device", "config.json": "config"} {
+	for path, content := range map[string]string{deviceIDFile: "device", "config.json": `{"global":"config"}`} {
 		mustWriteFile(t, filepath.Join(appData, path), content)
 	}
 	if err := store.Wipe(appData); err != nil {
@@ -496,15 +1036,6 @@ func createCookiesDBWithMarker(t *testing.T, path, marker string) {
 	mustExec(t, db, `INSERT INTO fixture_marker VALUES (?)`, marker)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func setAccountIdentity(t *testing.T, path, org, routing string) {
-	t.Helper()
-	db := openSQLite(t, path)
-	defer db.Close()
-	for name, value := range map[string]string{"lastActiveOrg": org, "routingHint": routing} {
-		mustExec(t, db, `INSERT INTO cookies(host_key, name, expires_utc, value, encrypted_value) VALUES ('.claude.ai', ?, 0, '', ?)`, name, []byte(value))
 	}
 }
 

@@ -57,13 +57,14 @@ claude-desktop-swap delete <name>      # remove a profile
 
 ## Cookie Encryption
 
-Chromium encrypts cookie values using the OS keychain. On the **same machine**, all profiles share the same encryption key — so encrypted blobs can be copied verbatim between profile snapshots without decryption. Never decrypt cookie values; always work with raw encrypted blobs.
+Chromium encrypts cookie values using the OS keychain. On the **same machine**, all profiles share the same encryption key — so encrypted blobs can be copied verbatim between profile snapshots without decryption. The swap path never decrypts cookie values; always copy raw encrypted blobs.
 
 ## Security Notes
 
 - Never log or print cookie values.
 - Profile directories should be created with `0700` permissions.
 - Never store decrypted session data anywhere.
+- The macOS-only `internal/account` label helper may decrypt a session key in memory to query account metadata; it must never persist or log the raw value, and the Windows tray must not use it.
 
 ## Testing
 

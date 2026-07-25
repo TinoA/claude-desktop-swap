@@ -11,7 +11,6 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"golang.org/x/sys/windows"
 )
 
@@ -53,6 +52,7 @@ const (
 	nativeDTVCenter       = 0x00000004
 	nativeDTSingleLine    = 0x00000020
 	nativeTransparent     = 1
+	nativeMBYesNo         = 0x00000004
 	nativeMBYesNoCancel   = 0x00000003
 	nativeMBIconQuestion  = 0x00000020
 	nativeMBIconWarning   = 0x00000030
@@ -64,6 +64,7 @@ const (
 	nativeOFNPathExists   = 0x00000800
 	nativeOFNFileExists   = 0x00001000
 	nativeOFNOverwrite    = 0x00000002
+	windowsAppUserModelID = "TinoA.ClaudeSwap.Tray.1"
 )
 
 var (
@@ -84,7 +85,12 @@ var (
 	nativeShowWindow        = nativeUser32.NewProc("ShowWindow")
 	nativeUpdateWindow      = nativeUser32.NewProc("UpdateWindow")
 	nativeSetForeground     = nativeUser32.NewProc("SetForegroundWindow")
+	nativeSetActiveWindow   = nativeUser32.NewProc("SetActiveWindow")
+	nativeBringToTop        = nativeUser32.NewProc("BringWindowToTop")
 	nativeSetFocus          = nativeUser32.NewProc("SetFocus")
+	nativeGetForeground     = nativeUser32.NewProc("GetForegroundWindow")
+	nativeGetWindowThread   = nativeUser32.NewProc("GetWindowThreadProcessId")
+	nativeAttachThreadInput = nativeUser32.NewProc("AttachThreadInput")
 	nativeGetMetrics        = nativeUser32.NewProc("GetSystemMetrics")
 	nativeSetLayered        = nativeUser32.NewProc("SetLayeredWindowAttributes")
 	nativeSetTimer          = nativeUser32.NewProc("SetTimer")
@@ -96,9 +102,11 @@ var (
 	nativeGetWindowText     = nativeUser32.NewProc("GetWindowTextW")
 	nativeGetTextLength     = nativeUser32.NewProc("GetWindowTextLengthW")
 	nativeMessageBox        = nativeUser32.NewProc("MessageBoxW")
+	nativeSetProcessAppID   = nativeShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
 	nativeDrawIcon          = nativeUser32.NewProc("DrawIconEx")
 	nativeDestroyIcon       = nativeUser32.NewProc("DestroyIcon")
 	nativeGetModule         = nativeKernel32.NewProc("GetModuleHandleW")
+	nativeGetCurrentThread  = nativeKernel32.NewProc("GetCurrentThreadId")
 	nativeExtractIconEx     = nativeShell32.NewProc("ExtractIconExW")
 	nativeCreateBrush       = nativeGDI32.NewProc("CreateSolidBrush")
 	nativeDeleteObject      = nativeGDI32.NewProc("DeleteObject")
@@ -112,6 +120,18 @@ var (
 	nativeGetSaveFile       = nativeCommDlg.NewProc("GetSaveFileNameW")
 	nativeCommDlgError      = nativeCommDlg.NewProc("CommDlgExtendedError")
 )
+
+func setCurrentProcessAppUserModelID() error {
+	appID, err := windows.UTF16PtrFromString(windowsAppUserModelID)
+	if err != nil {
+		return err
+	}
+	result, _, _ := nativeSetProcessAppID.Call(uintptr(unsafe.Pointer(appID)))
+	if int32(result) < 0 {
+		return fmt.Errorf("set AppUserModelID: HRESULT 0x%08X", uint32(result))
+	}
+	return nil
+}
 
 type nativeWndClassEx struct {
 	cbSize        uint32
@@ -215,12 +235,7 @@ func nativeRegisterOverlayClass() error {
 func nativeTrayChoice(title, message string) (trayChoiceValue, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	result, _, err := nativeMessageBox.Call(
-		0,
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(message))),
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
-		nativeMBYesNoCancel|nativeMBIconQuestion|nativeMBSetForeground|nativeMBTopMost,
-	)
+	result, err := nativeFocusedMessageBox(title, message, nativeMBYesNoCancel|nativeMBIconQuestion)
 	switch result {
 	case 6:
 		return trayYes, nil
@@ -233,19 +248,81 @@ func nativeTrayChoice(title, message string) (trayChoiceValue, error) {
 	}
 }
 
+func nativeTrayConfirm(title, message string) (bool, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	result, err := nativeFocusedMessageBox(title, message, nativeMBYesNo|nativeMBIconQuestion)
+	switch result {
+	case 6:
+		return true, nil
+	case 7:
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 func trayWarning(title, message string) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	nativeMessageBox.Call(
-		0,
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(message))),
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
-		nativeMBIconWarning|nativeMBSetForeground|nativeMBTopMost,
-	)
+	_, _ = nativeFocusedMessageBox(title, message, nativeMBIconWarning)
 }
 
-func trayPrompt(title string) (string, error) {
-	return nativeInputDialog(title, "Profile name:", false)
+func nativeFocusedMessageBox(title, message string, flags uintptr) (uintptr, error) {
+	owner := nativeMessageOwner()
+	if owner != 0 {
+		defer nativeDestroyWindow.Call(owner)
+		nativeActivateWindow(owner)
+	}
+	result, _, err := nativeMessageBox.Call(
+		owner,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(message))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(title))),
+		flags|nativeMBSetForeground|nativeMBTopMost,
+	)
+	return result, err
+}
+
+func nativeMessageOwner() uintptr {
+	if err := nativeRegisterInputClass(); err != nil {
+		return 0
+	}
+	screenWidth, _, _ := nativeGetMetrics.Call(nativeSMCXScreen)
+	screenHeight, _, _ := nativeGetMetrics.Call(nativeSMCYScreen)
+	hInstance, _, _ := nativeGetModule.Call(0)
+	owner, _, _ := nativeCreateWindow.Call(
+		nativeWSExTopmost|nativeWSExToolWindow|nativeWSExLayered,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("WindowsClaudeSwapInput"))),
+		0,
+		nativeWSPopup,
+		screenWidth/2, screenHeight/2, 1, 1,
+		0, 0, hInstance, 0,
+	)
+	if owner == 0 {
+		return 0
+	}
+	nativeSetLayered.Call(owner, 0, 0, nativeLayeredAlpha)
+	nativeShowWindow.Call(owner, nativeSWShow)
+	nativeUpdateWindow.Call(owner)
+	return owner
+}
+
+func nativeActivateWindow(hwnd uintptr) {
+	currentThread, _, _ := nativeGetCurrentThread.Call()
+	foreground, _, _ := nativeGetForeground.Call()
+	var foregroundThread uintptr
+	if foreground != 0 {
+		foregroundThread, _, _ = nativeGetWindowThread.Call(foreground, 0)
+	}
+	attached := foregroundThread != 0 && foregroundThread != currentThread
+	if attached {
+		nativeAttachThreadInput.Call(currentThread, foregroundThread, 1)
+		defer nativeAttachThreadInput.Call(currentThread, foregroundThread, 0)
+	}
+	nativeBringToTop.Call(hwnd)
+	nativeSetForeground.Call(hwnd)
+	nativeSetActiveWindow.Call(hwnd)
+	nativeSetFocus.Call(hwnd)
 }
 
 func nativeTraySecretPrompt(title, message string) (string, error) {
@@ -378,11 +455,14 @@ func nativeInputWindowProc(hwnd, message, wParam, lParam uintptr) uintptr {
 	return result
 }
 
-func nativeTrayFileDialog(open bool) (string, error) {
+func nativeTrayFileDialog(open bool, defaultName string) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	buffer := make([]uint16, 32768)
-	copy(buffer, windows.StringToUTF16("claude-swap-backup.csb"))
+	if defaultName == "" {
+		defaultName = "windows-claude-swap-backup.csb"
+	}
+	copy(buffer, windows.StringToUTF16(defaultName))
 	filter := nativeBackupFileFilter()
 	defaultExtension, _ := windows.UTF16PtrFromString("csb")
 	dialog := nativeOpenFileName{
@@ -405,7 +485,7 @@ func nativeTrayFileDialog(open bool) (string, error) {
 	if result == 0 {
 		code, _, _ := nativeCommDlgError.Call()
 		if code != 0 {
-			return "", fmt.Errorf("Windows file picker failed: 0x%X", code)
+			return "", fmt.Errorf("windows file picker failed: 0x%X", code)
 		}
 		return "", nil
 	}
@@ -442,16 +522,20 @@ type nativeOpenFileName struct {
 	FlagsEx           uint32
 }
 
-func startNativeOverlay(message string, success bool) *switchOverlay {
+func startNativeOverlay(message string, success bool, iconPaths ...string) *switchOverlay {
 	overlay := &switchOverlay{ready: make(chan error, 1), done: make(chan struct{})}
-	go runNativeOverlay(overlay, message, success)
+	iconPath := ""
+	if len(iconPaths) > 0 {
+		iconPath = iconPaths[0]
+	}
+	go runNativeOverlay(overlay, message, success, iconPath)
 	if err := <-overlay.ready; err != nil {
 		return &switchOverlay{}
 	}
 	return overlay
 }
 
-func runNativeOverlay(overlay *switchOverlay, message string, success bool) {
+func runNativeOverlay(overlay *switchOverlay, message string, success bool, iconPath string) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := nativeRegisterOverlayClass(); err != nil {
@@ -465,9 +549,7 @@ func runNativeOverlay(overlay *switchOverlay, message string, success bool) {
 	top, _, _ := nativeGetMetrics.Call(nativeSMYVirtual)
 	hInstance, _, _ := nativeGetModule.Call(0)
 	state := &nativeOverlayState{message: message, success: success}
-	if provider, ok := platform.Current().(interface{ LaunchPath() string }); ok {
-		state.icon = nativeExtractIcon(provider.LaunchPath())
-	}
+	state.icon = nativeExtractIcon(iconPath)
 	hwnd, _, _ := nativeCreateWindow.Call(
 		nativeWSExLayered|nativeWSExTopmost|nativeWSExToolWindow,
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("WindowsClaudeSwapOverlay"))),

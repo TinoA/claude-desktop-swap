@@ -3,9 +3,13 @@
 package platform
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestCookiesPathPrefersNetwork(t *testing.T) {
@@ -25,38 +29,6 @@ func TestCookiesPathFallsBackToRoot(t *testing.T) {
 	root := t.TempDir()
 	if got := cookiesPath(root); got != filepath.Join(root, "Cookies") {
 		t.Fatalf("cookiesPath = %q", got)
-	}
-}
-
-func TestDesktopProcessPIDsMatchExecutablePathOnly(t *testing.T) {
-	output := "101|C:\\Program Files\\WindowsApps\\Claude_1.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe\n202|C:\\Users\\user\\AppData\\Roaming\\Claude\\claude-code\\claude.exe\n"
-	got := desktopProcessPIDs(output, `C:\Program Files\WindowsApps\Claude_1.0_x64__pzs8sxrjxfjjc\app\Claude.exe`, false)
-	if len(got) != 1 || got[0] != 101 {
-		t.Fatalf("desktopProcessPIDs = %v", got)
-	}
-}
-
-func TestDesktopProcessPIDsAcceptMissingMSIXPath(t *testing.T) {
-	output := "101|\n202|C:\\Users\\user\\AppData\\Roaming\\Claude\\claude-code\\claude.exe\n"
-	got := desktopProcessPIDs(output, `C:\Program Files\WindowsApps\Claude_1.0_x64__pzs8sxrjxfjjc\app\Claude.exe`, true)
-	if len(got) != 1 || got[0] != 101 {
-		t.Fatalf("desktopProcessPIDs = %v", got)
-	}
-}
-
-func TestDesktopProcessRootPIDsExcludeChildren(t *testing.T) {
-	output := "101|50|C:\\Program Files\\WindowsApps\\Claude_1.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe\n202|101|C:\\Program Files\\WindowsApps\\Claude_1.0_x64__pzs8sxrjxfjjc\\app\\Claude.exe\n303|77|C:\\Users\\user\\AppData\\Roaming\\Claude\\claude-code\\claude.exe\n"
-	got := desktopProcessRootPIDs(output, `C:\Program Files\WindowsApps\Claude_1.0_x64__pzs8sxrjxfjjc\app\Claude.exe`, false)
-	if len(got) != 1 || got[0] != 101 {
-		t.Fatalf("desktopProcessRootPIDs = %v", got)
-	}
-}
-
-func TestDesktopProcessRootPIDsAcceptMissingMSIXPaths(t *testing.T) {
-	output := "101|50|\n202|101|\n303|77|C:\\Users\\user\\AppData\\Roaming\\Claude\\claude-code\\claude.exe\n"
-	got := desktopProcessRootPIDs(output, `C:\Program Files\WindowsApps\Claude_1.0_x64__pzs8sxrjxfjjc\app\Claude.exe`, true)
-	if len(got) != 1 || got[0] != 101 {
-		t.Fatalf("desktopProcessRootPIDs = %v", got)
 	}
 }
 
@@ -81,6 +53,55 @@ func TestSquirrelOwnsVersionedDesktopProcessesOnly(t *testing.T) {
 	}
 }
 
+func TestSquirrelExecutableUsesStableLauncher(t *testing.T) {
+	root := t.TempDir()
+	launcher := filepath.Join(root, processName)
+	if err := os.WriteFile(launcher, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := squirrelExecutable(root); got != launcher {
+		t.Fatalf("squirrelExecutable = %q", got)
+	}
+}
+
+func TestSquirrelExecutableFallsBackToNewestVersion(t *testing.T) {
+	root := t.TempDir()
+	oldExecutable := filepath.Join(root, "app-1.9.0", processName)
+	newExecutable := filepath.Join(root, "app-1.10.0", processName)
+	for _, executable := range []string{oldExecutable, newExecutable} {
+		if err := os.MkdirAll(filepath.Dir(executable), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(executable, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	if err := os.Chtimes(oldExecutable, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newExecutable, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := squirrelExecutable(root); got != newExecutable {
+		t.Fatalf("squirrelExecutable = %q", got)
+	}
+}
+
+func TestMSIXFallbackOwnsOnlyClaudePackageProcesses(t *testing.T) {
+	root := filepath.Join(`C:\Program Files`, "WindowsApps")
+	install := windowsInstall{kind: installMSIX, msix: true, processRoot: root}
+	if !install.ownsProcess(filepath.Join(root, "Claude_1.0.0.0_x64__pzs8sxrjxfjjc", "app", "Claude.exe")) {
+		t.Fatal("Claude MSIX process was not recognized")
+	}
+	if install.ownsProcess(filepath.Join(root, "Other_1.0.0.0_x64__example", "app", "Claude.exe")) {
+		t.Fatal("unrelated MSIX process was recognized")
+	}
+	if !install.ownsProcess(filepath.Join(`D:\WindowsApps`, "Claude_1.0.0.0_x64__pzs8sxrjxfjjc", "app", "Claude.exe")) {
+		t.Fatal("Claude MSIX process on another drive was not recognized")
+	}
+}
+
 func TestPathWithinRejectsSiblingDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "AnthropicClaude")
 	if !pathWithin(filepath.Join(root, "app-1", "claude.exe"), root) {
@@ -88,5 +109,53 @@ func TestPathWithinRejectsSiblingDirectory(t *testing.T) {
 	}
 	if pathWithin(root+"-old", root) {
 		t.Fatal("sibling path was accepted")
+	}
+}
+
+func TestStopWindowsProcessesAcceptsLateExit(t *testing.T) {
+	var events []string
+	waits := []bool{false, false, true}
+	wait := func(timeout time.Duration) (bool, error) {
+		events = append(events, "wait:"+timeout.String())
+		exited := waits[0]
+		waits = waits[1:]
+		return exited, nil
+	}
+	taskkill := func(force bool) {
+		events = append(events, "taskkill:"+strconv.FormatBool(force))
+	}
+	force := func(timeout time.Duration) (bool, error) {
+		events = append(events, "force:"+timeout.String())
+		return false, nil
+	}
+
+	if err := stopWindowsProcesses(wait, taskkill, force); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wait:2s", "taskkill:false", "wait:2s", "force:3s", "wait:5s"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestStopWindowsProcessesStillRejectsStuckProcess(t *testing.T) {
+	wait := func(time.Duration) (bool, error) { return false, nil }
+	err := stopWindowsProcesses(wait, func(bool) {}, func(time.Duration) (bool, error) {
+		return false, nil
+	})
+	if err == nil || err.Error() != "claude desktop processes did not exit before timeout" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestStopWindowsProcessesReturnsInspectionError(t *testing.T) {
+	want := errors.New("process inspection failed")
+	err := stopWindowsProcesses(func(time.Duration) (bool, error) {
+		return false, want
+	}, func(bool) {}, func(time.Duration) (bool, error) {
+		return false, nil
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v", err)
 	}
 }
