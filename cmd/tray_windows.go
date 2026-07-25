@@ -590,25 +590,6 @@ func restartLoginWindow(workflow *addWorkflow, p platform.Platform) error {
 	return nil
 }
 
-func restartLoginProcess(workflow *addWorkflow, p platform.Platform) error {
-	running, err := p.IsRunning()
-	if err != nil {
-		return err
-	}
-	if running {
-		if err := p.KillApp(); err != nil {
-			return err
-		}
-	}
-	if err := workflow.store.WipeAt(workflow.appData, workflow.live); err != nil {
-		return fmt.Errorf("clear incomplete login: %w", err)
-	}
-	if err := p.LaunchApp(); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (s *trayState) saveClosedSession(p platform.Platform) {
 	if s.workflowSnapshot() != nil || s.switchingSnapshot() {
 		return
