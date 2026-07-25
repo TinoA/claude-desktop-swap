@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/TinoA/claude-desktop-swap/compare/v1.0.3...v1.1.0) (2026-07-25)
+
+
+### Features
+
+* improve Windows tray and documentation ([5a563fe](https://github.com/TinoA/claude-desktop-swap/commit/5a563fe878213a82e1772a193472c6850597006e))
+* prepare Windows Claude Swap release ([f980d2b](https://github.com/TinoA/claude-desktop-swap/commit/f980d2bc8b0f40ced354af4d1cd42f01a9c2bccc))
+
 ## [1.0.3](https://github.com/TinoA/claude-desktop-swap/compare/v1.0.2...v1.0.3) (2026-07-14)
 
 
