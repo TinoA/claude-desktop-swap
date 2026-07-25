@@ -4,7 +4,8 @@ linters:
     presets:
       - std-error-handling
     rules:
-      - path: (cmd/(delete_overlay_windows|native_ui_windows|switch_overlay_windows)\.go|internal/platform/windows\.go|internal/profile/backup_windows\.go)
+      # Native Win32 calls use their return value as the authoritative error signal.
+      - path: (cmd/(delete_overlay_windows|first_run_guide_windows|native_ui_windows|switch_overlay_windows)\.go|internal/platform/windows\.go|internal/profile/backup_windows\.go)
         linters:
           - errcheck
 formatters:

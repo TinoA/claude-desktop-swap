@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Windows Claude Swap logo" width="200">
+  <a href="https://github.com/TinoA/claude-desktop-swap">
+    <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Windows Claude Swap — Claude account switching for Windows" width="190">
+  </a>
 </p>
 
 <h1 align="center">Windows Claude Swap</h1>
@@ -76,7 +78,7 @@ For a complete backup, Claude Desktop may briefly close while the active profile
 
 ## Your sessions and chats
 
-Windows Claude Swap stores the local Claude Desktop data needed to reopen each account, including encrypted cookies and browser storage. Cookie values are copied in their encrypted form and are never decrypted, displayed, or written to logs.
+Windows Claude Swap stores the local Claude Desktop data needed to reopen each account, including encrypted cookies and browser storage. On Windows, cookie values are copied in their encrypted form and are never decrypted, displayed, or written to logs.
 
 Chats are not copied by this app. Conversation history belongs to each Claude account and is loaded by Claude Desktop from Anthropic when that account is active.
 
@@ -119,27 +121,40 @@ Each profile can include:
 - IndexedDB and Session Storage.
 - Account identity hashes and profile metadata used for safer matching.
 
-The app never decrypts Chromium cookie values. Profiles are isolated under `.claude-swap`, and tests use temporary data rather than a live Claude Desktop profile.
+The Windows tray never decrypts Chromium cookie values. Profiles are isolated under `.claude-swap`, and tests use temporary data rather than a live Claude Desktop profile. The legacy macOS CLI account-label helper can use the macOS keychain to query account metadata; it is not used by the Windows tray.
 
 ### Build from source
 
-Requirements: Windows and Go as declared in [`go.mod`](go.mod).
+Requirements: Windows, Go as declared in [`go.mod`](go.mod), and Visual C++
+Build Tools for the native launcher.
 
 ```powershell
-go test ./...
-go vet ./...
-go build -trimpath -o claude-desktop-swap.exe .
-.\claude-desktop-swap.exe tray
+.\scripts\project.ps1 -Task Validate
+.\scripts\project.ps1 -Task Build -Arch amd64 -Version dev
 ```
 
-A locally compiled executable is separate from the installed release. Building it does not uninstall Claude Desktop or remove saved profiles.
+The binary is created under `installer\dist\windows_amd64`. Use `-Arch arm64`
+for Windows on ARM. Inno Setup is also required when using `-Task Installer` or
+`-Task All`.
+
+A locally compiled executable is separate from the installed release. Building
+it does not uninstall Claude Desktop or remove saved profiles.
 
 ### Releases and updates
 
-GitHub Actions tests the project and publishes versioned Windows installers for `amd64` and `arm64`, CLI archives, and checksums. The tray checks this repository for new releases and links to the latest download; updates are not installed silently.
+GitHub Actions verifies module metadata, runs `go vet`, race-enabled tests, formatting/import linting, and reachable-vulnerability scanning before publishing versioned Windows installers for `amd64` and `arm64`, CLI archives, and checksums. The tray checks this repository for new releases and links to the latest download; updates are not installed silently.
+
+The Windows installer uses a graphical build that opens the tray on double-click without showing a console window. CLI archives remain console applications.
 
 This Windows-focused project is maintained at [`TinoA/claude-desktop-swap`](https://github.com/TinoA/claude-desktop-swap) and is based on [`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
 
 ## License
 
 Released under the [MIT License](LICENSE).
+
+## Developer documentation
+
+The technical design is described in [Architecture](docs/architecture.md).
+Contributors should also read [Contributing](CONTRIBUTING.md), the
+[regression checklist](docs/regression-review.md), and the
+[visual-assets guide](docs/assets.md).

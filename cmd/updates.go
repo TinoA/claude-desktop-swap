@@ -15,6 +15,7 @@ import (
 const (
 	githubReleaseAPI  = "https://api.github.com/repos/TinoA/claude-desktop-swap/releases/latest"
 	githubReleasePage = "https://github.com/TinoA/claude-desktop-swap/releases/latest"
+	githubRepoPage    = "https://github.com/TinoA/claude-desktop-swap"
 )
 
 type githubRelease struct {

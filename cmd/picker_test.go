@@ -37,3 +37,17 @@ func TestPickerAllowsUsableSelection(t *testing.T) {
 		t.Fatalf("chosen = %q", got)
 	}
 }
+
+func TestAccountLabelPrefersEmailAndHidesAutomaticID(t *testing.T) {
+	meta := profile.Meta{Name: "account-12345678-1234-4234-8234-123456789abc", Email: "person@example.test"}
+	if got := accountLabel(meta); got != "person@example.test" {
+		t.Fatalf("accountLabel with email = %q", got)
+	}
+	meta.Email = ""
+	if got := accountLabel(meta); got != "Account 12345678" {
+		t.Fatalf("accountLabel fallback = %q", got)
+	}
+	if got := accountLabel(profile.Meta{Name: "personal"}); got != "personal" {
+		t.Fatalf("legacy accountLabel = %q", got)
+	}
+}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
 	"github.com/spf13/cobra"
@@ -21,9 +22,17 @@ var root = &cobra.Command{
 }
 
 func Execute() {
+	root.SetArgs(startupArgs(os.Args[1:], runtime.GOOS))
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func startupArgs(args []string, goos string) []string {
+	if len(args) == 0 && goos == "windows" {
+		return []string{"tray"}
+	}
+	return args
 }
 
 func init() {

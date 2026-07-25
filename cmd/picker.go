@@ -189,7 +189,15 @@ func accountLabel(p profile.Meta) string {
 	if p.Email != "" {
 		return p.Email
 	}
-	return p.Name
+	return automaticAccountLabel(p.Name)
+}
+
+func automaticAccountLabel(name string) string {
+	const prefix = "account-"
+	if strings.HasPrefix(name, prefix) && len(name) >= len(prefix)+8 {
+		return "Account " + name[len(prefix):len(prefix)+8]
+	}
+	return name
 }
 
 func planLabel(p profile.Meta) string {

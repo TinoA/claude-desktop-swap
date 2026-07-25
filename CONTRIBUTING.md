@@ -26,9 +26,38 @@ The platform abstraction lives in `internal/platform/`. To add a new OS:
 
 ## Running tests locally
 
-```sh
-go test -v -race ./...
+On Windows, use the repository script so local checks match CI:
+
+```powershell
+.\scripts\project.ps1 -Task Validate
 ```
+
+Use `-Race` when the installed C toolchain supports Go's race detector. The
+complete validation also runs formatting checks, `go mod tidy -diff`, `go vet`,
+the linter, and the reachable-vulnerability scan.
+
+To build without installing:
+
+```powershell
+.\scripts\project.ps1 -Task Build -Arch amd64 -Version dev
+```
+
+To validate and create an installer:
+
+```powershell
+.\scripts\project.ps1 -Task All -Arch amd64 -Version dev.1 -InstallerVersion 0.5.0.1
+```
+
+Build output stays under `installer/dist/`.
+
+## Reporting bugs
+
+Use the GitHub bug-report form and include the app version, Windows version,
+whether Claude Desktop was open, and exact reproduction steps. Screenshots are
+welcome after private account details are hidden.
+
+Never attach `.csb` backups, `.claude-swap` profiles, Claude cookies, tokens, or
+the contents of `%APPDATA%\Claude`.
 
 ## Git hooks
 
@@ -64,3 +93,13 @@ docs: update installation instructions
 - Run `golangci-lint run` before pushing.
 - No comments unless the why is non-obvious.
 - No defensive error handling for impossible cases.
+
+## Project documentation
+
+- `docs/architecture.md` explains the account workflows and safety invariants.
+- `docs/regression-review.md` maps release checks to permanent tests.
+- `docs/assets.md` distinguishes source images from generated release assets.
+
+Keep commits small and use one concern per commit: tests, implementation,
+documentation, or build/release tooling. Do not mix generated artifacts with
+unrelated source changes.

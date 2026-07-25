@@ -27,8 +27,9 @@ const (
 	sessionStorageDir   = "Session Storage"
 	deviceIDFile        = "ant-did"
 	metaFile            = "meta.json"
-	formatVersion       = 3
+	formatVersion       = 4
 	digestFormatVersion = 2
+	deleteSuffix        = ".delete"
 
 	dirPerm  os.FileMode = 0700
 	filePerm os.FileMode = 0600
@@ -39,6 +40,7 @@ type Meta struct {
 	CreatedAt          time.Time `json:"created_at"`
 	LastUsed           time.Time `json:"last_used,omitempty"`
 	Email              string    `json:"email,omitempty"`
+	EmailLookupDone    bool      `json:"email_lookup_done,omitempty"`
 	Plan               string    `json:"plan,omitempty"`
 	FormatVersion      int       `json:"format_version,omitempty"`
 	SavedAt            time.Time `json:"saved_at,omitempty"`
@@ -46,8 +48,18 @@ type Meta struct {
 	CookieDigest       string    `json:"cookie_digest,omitempty"`
 	SessionDigest      string    `json:"session_digest,omitempty"`
 	AccountFingerprint string    `json:"account_fingerprint,omitempty"`
+	AccountUUIDHash    string    `json:"account_uuid_hash,omitempty"`
 	AccountUUIDHashes  []string  `json:"account_uuid_hashes,omitempty"`
 	IdentityHashes     []string  `json:"identity_hashes,omitempty"`
+	AccountStateDigest string    `json:"account_state_digest,omitempty"`
+}
+
+type DuplicateAccountError struct {
+	ExistingName string
+}
+
+func (e *DuplicateAccountError) Error() string {
+	return fmt.Sprintf("this Claude account is already saved as %q", e.ExistingName)
 }
 
 type Store struct {
@@ -64,23 +76,16 @@ func NewStore() (*Store, error) {
 }
 
 func newStore(base string) (*Store, error) {
-	profiles := filepath.Join(base, profilesDirName)
-	if err := os.MkdirAll(profiles, dirPerm); err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(base, dirPerm); err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(profiles, dirPerm); err != nil {
-		return nil, err
-	}
-	if err := securePath(base); err != nil {
-		return nil, err
-	}
-	if err := securePath(profiles); err != nil {
-		return nil, err
-	}
 	s := &Store{baseDir: base, now: time.Now}
+	if err := os.MkdirAll(base, dirPerm); err != nil {
+		return nil, err
+	}
+	if err := s.recoverImportedProfiles(); err != nil {
+		return nil, err
+	}
+	if err := s.ensureDirectories(); err != nil {
+		return nil, err
+	}
 	if err := s.recoverProfiles(); err != nil {
 		return nil, err
 	}
@@ -103,6 +108,9 @@ func (s *Store) Checkpoint(name, appDataPath string) error {
 func (s *Store) CheckpointAt(name, appDataPath, live string) error {
 	if !validProfileName(name) {
 		return fmt.Errorf("invalid profile name %q", name)
+	}
+	if err := s.ensureDirectories(); err != nil {
+		return err
 	}
 	if inspection := InspectCookies(live, s.now()); inspection.Health != HealthUsable {
 		return fmt.Errorf("refuse checkpoint of %s session: %s", inspection.Health, inspection.Reason)
@@ -143,20 +151,46 @@ func (s *Store) CheckpointAt(name, appDataPath, live string) error {
 			return err
 		}
 	}
+	accountState, err := captureAccountState(appDataPath)
+	if err != nil {
+		return err
+	}
+	accountStateDigest, err := writeAccountState(filepath.Join(stage, accountStateFile), accountState)
+	if err != nil {
+		return fmt.Errorf("stage account authentication state: %w", err)
+	}
 	digest, err := cookieDigest(stagedCookies)
 	if err != nil {
 		return err
 	}
 	evidence, _ := readCookieEvidence(stagedCookies)
 	identity := localIdentityAt(stage)
-	meta := Meta{Name: name, CreatedAt: s.now(), FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: evidence.sessionDigest, AccountFingerprint: evidence.accountFingerprint, AccountUUIDHashes: identity.uuidHashes, IdentityHashes: identity.emailHashes}
+	accountUUIDHash := primaryAccountUUIDHash(accountState)
+	if duplicate, err := s.duplicateAccountName(name, accountUUIDHash, evidence.sessionDigest, digest, identity); err != nil {
+		return err
+	} else if duplicate != "" {
+		return &DuplicateAccountError{ExistingName: duplicate}
+	}
+	email := ""
+	if len(identity.emails) == 1 {
+		email = identity.emails[0]
+	}
+	meta := Meta{Name: name, CreatedAt: s.now(), Email: email, EmailLookupDone: true, FormatVersion: formatVersion, SavedAt: s.now(), ObservedHealth: HealthUsable, CookieDigest: digest, SessionDigest: evidence.sessionDigest, AccountFingerprint: evidence.accountFingerprint, AccountUUIDHash: accountUUIDHash, AccountUUIDHashes: identity.uuidHashes, IdentityHashes: identity.emailHashes, AccountStateDigest: accountStateDigest}
 	if existing, err := s.loadMeta(name); err == nil {
 		meta.CreatedAt = existing.CreatedAt
 		meta.LastUsed = existing.LastUsed
-		meta.Email = existing.Email
+		if existing.Email != "" {
+			if meta.Email != "" && !strings.EqualFold(meta.Email, existing.Email) {
+				meta.IdentityHashes = existing.IdentityHashes
+			}
+			meta.Email = existing.Email
+		}
 		meta.Plan = existing.Plan
 		if meta.SessionDigest == "" {
 			meta.SessionDigest = existing.SessionDigest
+		}
+		if meta.AccountUUIDHash == "" {
+			meta.AccountUUIDHash = existing.AccountUUIDHash
 		}
 		if len(meta.IdentityHashes) == 0 {
 			meta.IdentityHashes = existing.IdentityHashes
@@ -199,6 +233,15 @@ func (s *Store) Inspect(name string) Inspection {
 		digest, err := cookieDigest(cookies)
 		if err != nil || digest != meta.CookieDigest {
 			return Inspection{Health: HealthUnknown, Reason: "profile integrity digest does not match"}
+		}
+	}
+	if err == nil && meta.FormatVersion >= formatVersion {
+		data, readErr := os.ReadFile(filepath.Join(s.profileDir(name), accountStateFile))
+		if readErr != nil || meta.AccountStateDigest == "" || digestBytes(data) != meta.AccountStateDigest {
+			return Inspection{Health: HealthUnknown, Reason: "account authentication state integrity does not match"}
+		}
+		if _, readErr := readAccountState(filepath.Join(s.profileDir(name), accountStateFile)); readErr != nil {
+			return Inspection{Health: HealthUnknown, Reason: "account authentication state is invalid"}
 		}
 	}
 	return inspection
@@ -250,6 +293,15 @@ func (s *Store) RestoreAt(name, appDataPath, live string) error {
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+	}
+	state := accountState{Version: accountStateVersion}
+	if savedState, err := readAccountState(filepath.Join(s.profileDir(name), accountStateFile)); err == nil {
+		state = savedState
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read saved account authentication state: %w", err)
+	}
+	if err := prepareAccountFiles(appDataPath, stage, state); err != nil {
+		return err
 	}
 
 	rollbackRoot, err := os.MkdirTemp(appDataPath, ".claude-restore-rollback-")
@@ -313,6 +365,12 @@ func (s *Store) RestoreAt(name, appDataPath, live string) error {
 			return fmt.Errorf("retain live %s: %w", directory.label, err)
 		}
 	}
+	for _, name := range []string{claudeConfigFile, coworkOpsFile} {
+		if err := moveToRollback(filepath.Join(appDataPath, name), filepath.Join(backupData, name)); err != nil {
+			rollback()
+			return fmt.Errorf("retain live account configuration: %w", err)
+		}
+	}
 
 	if err := os.Rename(stageCookies, live); err != nil {
 		rollback()
@@ -333,6 +391,23 @@ func (s *Store) RestoreAt(name, appDataPath, live string) error {
 			if err := os.Rename(stageDirectory, liveDirectory); err != nil {
 				rollback()
 				return fmt.Errorf("commit %s: %w", directory.label, err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			rollback()
+			return err
+		}
+	}
+	for _, name := range []string{claudeConfigFile, coworkOpsFile} {
+		stageFile := filepath.Join(stage, name)
+		liveFile := filepath.Join(appDataPath, name)
+		if _, err := os.Stat(stageFile); err == nil {
+			if err := os.Rename(stageFile, liveFile); err != nil {
+				rollback()
+				return fmt.Errorf("commit account configuration: %w", err)
+			}
+			if err := os.Chmod(liveFile, filePerm); err != nil {
+				rollback()
+				return err
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			rollback()
@@ -365,16 +440,15 @@ func (s *Store) Wipe(appDataPath string) error {
 }
 
 func (s *Store) WipeAt(appDataPath, live string) error {
+	if err := replaceAccountFiles(appDataPath, accountState{Version: accountStateVersion}); err != nil {
+		return fmt.Errorf("wipe account authentication state: %w", err)
+	}
 	for _, name := range []string{cookiesFile, cookiesJournalFile, cookiesWALFile, cookiesSHMFile} {
 		if err := os.Remove(filepath.Join(filepath.Dir(live), name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("wipe %s: %w", name, err)
 		}
 	}
 	return clearVolatile(appDataPath)
-}
-
-func HasActiveSession(appDataPath string) bool {
-	return InspectCookies(filepath.Join(appDataPath, cookiesFile), time.Now()).Health == HealthUsable
 }
 
 func HasActiveSessionAt(cookiesPath string) bool {
@@ -434,6 +508,14 @@ func (s *Store) MatchLiveAt(live string) (string, Health) {
 	return "", HealthUnknown
 }
 
+func appDataPathForCookies(cookiesPath string) string {
+	parent := filepath.Dir(cookiesPath)
+	if strings.EqualFold(filepath.Base(parent), "Network") {
+		return filepath.Dir(parent)
+	}
+	return parent
+}
+
 // IdentityEmailChangedAt reports a stable internal identity with a different
 // email identity. It is intentionally separate from MatchLiveAt so callers can
 // ask for confirmation before replacing a saved snapshot.
@@ -442,18 +524,46 @@ func (s *Store) IdentityEmailChangedAt(name, live string) bool {
 	if err != nil {
 		return false
 	}
-	liveIdentity := localIdentityAt(filepath.Dir(live))
+	liveAppData := appDataPathForCookies(live)
+	liveAccountUUIDHash := primaryAccountUUIDHashAt(liveAppData)
+	savedAccountUUIDHash := s.profileAccountUUIDHash(name, meta)
+	if liveAccountUUIDHash != "" && savedAccountUUIDHash != "" && liveAccountUUIDHash != savedAccountUUIDHash {
+		return false
+	}
+	liveIdentity := localIdentityAt(liveAppData)
 	savedIdentity := localIdentity{uuidHashes: meta.AccountUUIDHashes, emailHashes: meta.IdentityHashes}
 	if len(savedIdentity.uuidHashes) == 0 && len(savedIdentity.emailHashes) == 0 {
 		savedIdentity = localIdentityAt(s.profileDir(name))
 	}
-	if identityOverlapCount(liveIdentity.uuidHashes, savedIdentity.uuidHashes) < 2 {
+	samePrimaryAccount := liveAccountUUIDHash != "" && liveAccountUUIDHash == savedAccountUUIDHash
+	if !samePrimaryAccount && identityOverlapCount(liveIdentity.uuidHashes, savedIdentity.uuidHashes) < 2 {
 		return false
 	}
 	if len(liveIdentity.emailHashes) == 0 || len(savedIdentity.emailHashes) == 0 {
 		return false
 	}
 	return identityOverlapCount(liveIdentity.emailHashes, savedIdentity.emailHashes) == 0
+}
+
+func (s *Store) FindByAccountIdentityAt(appDataPath string) (string, error) {
+	accountUUIDHash := primaryAccountUUIDHashAt(appDataPath)
+	if accountUUIDHash == "" {
+		return "", nil
+	}
+	profiles, err := s.List()
+	if err != nil {
+		return "", err
+	}
+	matched := ""
+	for _, meta := range profiles {
+		if s.profileAccountUUIDHash(meta.Name, meta) == accountUUIDHash && meta.ObservedHealth == HealthUsable {
+			if matched != "" && matched != meta.Name {
+				return "", nil
+			}
+			matched = meta.Name
+		}
+	}
+	return matched, nil
 }
 
 func (s *Store) matchLiveAt(live string) (string, Health) {
@@ -466,15 +576,27 @@ func (s *Store) matchLiveAt(live string) (string, Health) {
 		return "", HealthUnknown
 	}
 	liveEvidence, _ := readCookieEvidence(live)
-	liveIdentity := localIdentityAt(filepath.Dir(live))
+	liveAppData := appDataPathForCookies(live)
+	liveIdentity := localIdentityAt(liveAppData)
+	liveAccountUUIDHash := primaryAccountUUIDHashAt(liveAppData)
 	profiles, err := s.List()
 	if err != nil {
 		return "", HealthUnknown
 	}
 	identityMatch := ""
 	identityScore := 0
-	identityTied := false
+	var identityMatches []string
 	for _, meta := range profiles {
+		if s.Inspect(meta.Name).Health != HealthUsable {
+			continue
+		}
+		profileAccountUUIDHash := s.profileAccountUUIDHash(meta.Name, meta)
+		if liveAccountUUIDHash != "" && profileAccountUUIDHash != "" {
+			if liveAccountUUIDHash == profileAccountUUIDHash {
+				return meta.Name, HealthUsable
+			}
+			continue
+		}
 		profileSessionDigest := meta.SessionDigest
 		if profileSessionDigest == "" {
 			evidence, _ := readCookieEvidence(filepath.Join(s.profileDir(meta.Name), cookiesFile))
@@ -482,14 +604,14 @@ func (s *Store) matchLiveAt(live string) (string, Health) {
 				profileSessionDigest = evidence.sessionDigest
 			}
 		}
-		if liveEvidence.sessionDigest != "" && profileSessionDigest == liveEvidence.sessionDigest && s.Inspect(meta.Name).Health == HealthUsable {
+		if liveEvidence.sessionDigest != "" && profileSessionDigest == liveEvidence.sessionDigest {
 			return meta.Name, HealthUsable
 		}
 		profileDigest := meta.CookieDigest
 		if profileDigest == "" {
 			profileDigest, _ = cookieDigest(filepath.Join(s.profileDir(meta.Name), cookiesFile))
 		}
-		if profileDigest == digest && s.Inspect(meta.Name).Health == HealthUsable {
+		if profileDigest == digest {
 			return meta.Name, HealthUsable
 		}
 		profileIdentity := localIdentity{uuidHashes: meta.AccountUUIDHashes, emailHashes: meta.IdentityHashes}
@@ -497,35 +619,146 @@ func (s *Store) matchLiveAt(live string) (string, Health) {
 			profileIdentity = localIdentityAt(s.profileDir(meta.Name))
 		}
 		score := identityMatchScore(liveIdentity, profileIdentity)
-		if score > 0 && s.Inspect(meta.Name).Health == HealthUsable {
+		if score > 0 {
 			switch {
 			case score > identityScore:
 				identityMatch = meta.Name
 				identityScore = score
-				identityTied = false
+				identityMatches = []string{meta.Name}
 			case score == identityScore:
-				identityTied = true
+				identityMatches = append(identityMatches, meta.Name)
 			}
 		}
 	}
-	if identityMatch != "" && !identityTied {
+	if identityMatch != "" && len(identityMatches) == 1 {
 		return identityMatch, HealthUsable
+	}
+	if len(identityMatches) > 1 {
+		current, _ := s.Current()
+		for _, name := range identityMatches {
+			if name == current {
+				return current, HealthUsable
+			}
+		}
 	}
 	return "", HealthUsable
 }
 
-func (s *Store) UpdateAccountInfo(name, email, plan string) error {
+func (s *Store) UpdateAccountEmailFromProfile(name string) (string, error) {
 	meta, err := s.loadMeta(name)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if email != "" {
-		meta.Email = email
+	identity := localIdentityAt(s.profileDir(name))
+	if len(identity.emails) != 1 {
+		return "", errors.New("saved profile does not contain one unambiguous account email")
 	}
-	if plan != "" {
-		meta.Plan = plan
+	meta.Email = identity.emails[0]
+	meta.EmailLookupDone = true
+	meta.IdentityHashes = identity.emailHashes
+	if err := s.saveMeta(name, meta); err != nil {
+		return "", err
 	}
-	return s.saveMeta(name, meta)
+	return meta.Email, nil
+}
+
+func (s *Store) UpdateAccountEmailFromLive(name, appDataPath string) (string, error) {
+	meta, err := s.loadMeta(name)
+	if err != nil {
+		return "", err
+	}
+	liveAccountUUIDHash := primaryAccountUUIDHashAt(appDataPath)
+	if liveAccountUUIDHash == "" || liveAccountUUIDHash != s.profileAccountUUIDHash(name, meta) {
+		return "", errors.New("live Claude account does not match the saved profile")
+	}
+	identity := localIdentityAt(appDataPath)
+	if len(identity.emails) != 1 {
+		return "", errors.New("live Claude data does not contain one unambiguous account email")
+	}
+	meta.Email = identity.emails[0]
+	meta.EmailLookupDone = true
+	meta.IdentityHashes = identity.emailHashes
+	if err := s.saveMeta(name, meta); err != nil {
+		return "", err
+	}
+	return meta.Email, nil
+}
+
+func (s *Store) BackfillAccountMetadata(name string) (Meta, error) {
+	meta, err := s.loadMeta(name)
+	if err != nil {
+		return Meta{}, err
+	}
+	changed := false
+	if meta.Email == "" && !meta.EmailLookupDone {
+		if email := AccountEmailAt(s.profileDir(name)); email != "" {
+			meta.Email = email
+		}
+		meta.EmailLookupDone = true
+		changed = true
+	}
+	if hash := s.profileAccountUUIDHash(name, meta); hash != "" {
+		if meta.AccountUUIDHash != hash {
+			meta.AccountUUIDHash = hash
+			changed = true
+		}
+	}
+	if changed {
+		if err := s.saveMeta(name, meta); err != nil {
+			return Meta{}, err
+		}
+	}
+	return meta, nil
+}
+
+func (s *Store) duplicateAccountName(name, accountUUIDHash, sessionDigest, cookieDigest string, identity localIdentity) (string, error) {
+	entries, err := os.ReadDir(s.profilesPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || entry.Name() == name {
+			continue
+		}
+		meta, err := s.loadMeta(entry.Name())
+		if err != nil {
+			continue
+		}
+		existingAccountUUIDHash := s.profileAccountUUIDHash(entry.Name(), meta)
+		if accountUUIDHash != "" && existingAccountUUIDHash != "" {
+			if accountUUIDHash == existingAccountUUIDHash {
+				return entry.Name(), nil
+			}
+			continue
+		}
+		if sessionDigest != "" && sessionDigest == meta.SessionDigest {
+			return entry.Name(), nil
+		}
+		if cookieDigest != "" && cookieDigest == meta.CookieDigest {
+			return entry.Name(), nil
+		}
+		existingIdentity := localIdentity{uuidHashes: meta.AccountUUIDHashes}
+		if len(existingIdentity.uuidHashes) == 0 {
+			existingIdentity = localIdentityAt(s.profileDir(entry.Name()))
+		}
+		if identityOverlapCount(identity.uuidHashes, existingIdentity.uuidHashes) >= 2 {
+			return entry.Name(), nil
+		}
+	}
+	return "", nil
+}
+
+func (s *Store) profileAccountUUIDHash(name string, meta Meta) string {
+	state, err := readAccountState(filepath.Join(s.profileDir(name), accountStateFile))
+	if err == nil {
+		if hash := primaryAccountUUIDHash(state); hash != "" {
+			return hash
+		}
+	}
+	return meta.AccountUUIDHash
 }
 
 func (s *Store) Delete(name string) error {
@@ -535,11 +768,47 @@ func (s *Store) Delete(name string) error {
 	if !s.Exists(name) {
 		return fmt.Errorf("profile %q not found", name)
 	}
-	current, _ := s.Current()
-	if current == name {
-		_ = os.Remove(filepath.Join(s.baseDir, currentFileName))
+	current, err := s.Current()
+	if errors.Is(err, os.ErrNotExist) {
+		current = ""
+	} else if err != nil {
+		return fmt.Errorf("read active profile marker: %w", err)
 	}
-	return os.RemoveAll(s.profileDir(name))
+	profilePath := s.profileDir(name)
+	deletedPath := filepath.Join(s.profilesPath(), "."+name+deleteSuffix)
+	if err := os.RemoveAll(deletedPath); err != nil {
+		return fmt.Errorf("clean previous account deletion: %w", err)
+	}
+	if err := os.Rename(profilePath, deletedPath); err != nil {
+		return fmt.Errorf("prepare account deletion: %w", err)
+	}
+	rollback := func() {
+		_ = os.Rename(deletedPath, profilePath)
+	}
+	if current == name {
+		if err := os.Remove(filepath.Join(s.baseDir, currentFileName)); err != nil {
+			rollback()
+			return fmt.Errorf("clear active profile marker: %w", err)
+		}
+	}
+	if err := syncDir(s.profilesPath()); err != nil {
+		if current == name {
+			_ = writeFileAtomic(filepath.Join(s.baseDir, currentFileName), []byte(name))
+		}
+		rollback()
+		return err
+	}
+	if current == name {
+		if err := syncDir(s.baseDir); err != nil {
+			_ = writeFileAtomic(filepath.Join(s.baseDir, currentFileName), []byte(name))
+			rollback()
+			return err
+		}
+	}
+	if err := os.RemoveAll(deletedPath); err != nil {
+		return fmt.Errorf("account was removed but its temporary cleanup failed: %w", err)
+	}
+	return syncDir(s.profilesPath())
 }
 
 func (s *Store) Current() (string, error) {
@@ -551,6 +820,13 @@ func (s *Store) Current() (string, error) {
 }
 
 func (s *Store) SetCurrent(name string) error {
+	if _, err := os.Stat(s.baseDir); errors.Is(err, os.ErrNotExist) {
+		if err := s.ensureDirectories(); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
 	return writeFileAtomic(filepath.Join(s.baseDir, currentFileName), []byte(name))
 }
 
@@ -595,6 +871,28 @@ func (s *Store) recoverProfiles() error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
+		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, deleteSuffix) {
+			profileName := strings.TrimSuffix(strings.TrimPrefix(name, "."), deleteSuffix)
+			current, err := s.Current()
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("recover interrupted account deletion: %w", err)
+			}
+			if current == profileName {
+				final := s.profileDir(profileName)
+				if _, err := os.Stat(final); errors.Is(err, os.ErrNotExist) {
+					if err := os.Rename(filepath.Join(s.profilesPath(), name), final); err != nil {
+						return fmt.Errorf("restore account interrupted during deletion: %w", err)
+					}
+					continue
+				} else if err != nil {
+					return err
+				}
+			}
+			if err := os.RemoveAll(filepath.Join(s.profilesPath(), name)); err != nil {
+				return err
+			}
+			continue
+		}
 		if strings.HasSuffix(name, ".backup") && strings.HasPrefix(name, ".") {
 			profileName := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".backup")
 			final := s.profileDir(profileName)
@@ -619,6 +917,23 @@ func (s *Store) ProfileCookiesPath(name string) string {
 
 func (s *Store) profileDir(name string) string { return filepath.Join(s.profilesPath(), name) }
 func (s *Store) profilesPath() string          { return filepath.Join(s.baseDir, profilesDirName) }
+
+func (s *Store) ensureDirectories() error {
+	profiles := s.profilesPath()
+	if err := os.MkdirAll(profiles, dirPerm); err != nil {
+		return err
+	}
+	if err := os.Chmod(s.baseDir, dirPerm); err != nil {
+		return err
+	}
+	if err := os.Chmod(profiles, dirPerm); err != nil {
+		return err
+	}
+	if err := securePath(s.baseDir); err != nil {
+		return err
+	}
+	return securePath(profiles)
+}
 
 func (s *Store) loadMeta(name string) (Meta, error) {
 	data, err := os.ReadFile(filepath.Join(s.profileDir(name), metaFile))

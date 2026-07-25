@@ -5,3 +5,8 @@ dist/
 *.test
 coverage.out
 .atl/
+.claude-swap/
+*.csb
+*.bak
+*.log
+build-backups/

@@ -2,17 +2,21 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 type pendingAdd struct {
-	Name      string    `json:"name"`
-	Previous  string    `json:"previous"`
-	AppData   string    `json:"app_data"`
-	Live      string    `json:"live_cookies"`
-	CreatedAt time.Time `json:"created_at"`
+	Name               string    `json:"name"`
+	Previous           string    `json:"previous"`
+	AppData            string    `json:"app_data"`
+	Live               string    `json:"live_cookies"`
+	CreatedAt          time.Time `json:"created_at"`
+	LoginLogOffset     int64     `json:"login_log_offset,omitempty"`
+	PersistenceRetries int       `json:"persistence_retries,omitempty"`
 }
 
 func pendingAddPath() (string, error) {
@@ -84,4 +88,29 @@ func loadPendingAdd() (pendingAdd, error) {
 		return pendingAdd{}, err
 	}
 	return value, nil
+}
+
+func writeAddDiagnostic(name, state, detail string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, ".claude-swap")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return
+	}
+	_ = os.Chmod(dir, 0700)
+	clean := func(value string) string {
+		value = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(value)
+		runes := []rune(value)
+		if len(runes) > 512 {
+			value = string(runes[:512])
+		}
+		return value
+	}
+	line := fmt.Sprintf("%s\t%s\t%s\t%s\n", time.Now().UTC().Format(time.RFC3339), clean(state), clean(name), clean(detail))
+	path := filepath.Join(dir, "last-add.log")
+	if err := os.WriteFile(path, []byte(line), 0600); err == nil {
+		_ = os.Chmod(path, 0600)
+	}
 }

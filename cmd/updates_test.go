@@ -15,11 +15,21 @@ func TestUpdateAvailableComparesStableVersions(t *testing.T) {
 		{"v2.0.0", "v1.9.9", false},
 		{"dev", "v1.0.0", true},
 		{"dev", "", false},
+		{"dev.49", "v1.0.0", false},
 	}
 	for _, test := range tests {
 		if got := updateAvailable(test.current, test.latest); got != test.want {
 			t.Fatalf("updateAvailable(%q, %q) = %v, want %v", test.current, test.latest, got, test.want)
 		}
+	}
+}
+
+func TestGitHubPagesPointToThisRepository(t *testing.T) {
+	if githubRepoPage != "https://github.com/TinoA/claude-desktop-swap" {
+		t.Fatalf("githubRepoPage = %q", githubRepoPage)
+	}
+	if githubReleasePage != githubRepoPage+"/releases/latest" {
+		t.Fatalf("githubReleasePage = %q", githubReleasePage)
 	}
 }
 
