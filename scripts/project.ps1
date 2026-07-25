@@ -133,7 +133,7 @@ function Invoke-WindowsBuild {
         $env:GOOS = "windows"
         $env:GOARCH = $Arch
         $env:CGO_ENABLED = "0"
-        $ldflags = "-s -w -H=windowsgui -X github.com/FranCalveyra/claude-desktop-swap/cmd.Version=$Version"
+        $ldflags = "-s -w -H=windowsgui -X github.com/TinoA/claude-desktop-switcher/cmd.Version=$Version"
         Push-Location $repository
         try {
             Invoke-Checked -Command $go -Arguments @("build", "-trimpath", "-ldflags", $ldflags, "-o", $binary, ".")

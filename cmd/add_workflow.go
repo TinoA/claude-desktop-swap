@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/platform"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 )
 
 type addStage string

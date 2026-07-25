@@ -1,4 +1,4 @@
-module github.com/FranCalveyra/claude-desktop-swap
+module github.com/TinoA/claude-desktop-switcher
 
 go 1.25.12
 

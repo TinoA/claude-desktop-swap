@@ -6,7 +6,7 @@
 #include <shellapi.h>
 #include <strsafe.h>
 
-#define PRODUCT_NAME L"Windows Claude Swap"
+#define PRODUCT_NAME L"Claude Desktop Switcher"
 #define TARGET_NAME L"claude-desktop-swap.exe"
 #define PATH_CAPACITY 32768
 
@@ -29,10 +29,10 @@ static void show_launch_error(DWORD error)
     StringCchPrintfW(
         message,
         ARRAYSIZE(message),
-        L"Windows Claude Swap could not start.\n\n%s\n\nError code: %lu",
+        L"Claude Desktop Switcher could not start.\n\n%s\n\nError code: %lu",
         system_message,
         error);
-    MessageBoxW(NULL, message, L"Could not start Windows Claude Swap", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    MessageBoxW(NULL, message, L"Could not start Claude Desktop Switcher", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 }
 
 static BOOL sibling_paths(WCHAR *directory, size_t directory_capacity, WCHAR *target, size_t target_capacity)

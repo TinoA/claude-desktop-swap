@@ -17,10 +17,10 @@ func TestNativeBackupFileFilterUsesDoubleNULTerminator(t *testing.T) {
 
 func TestDefaultBackupFilenameIdentifiesOnlyPasswordBackups(t *testing.T) {
 	now := time.Date(2026, 7, 23, 20, 55, 0, 0, time.Local)
-	if got := defaultBackupFilename(now, false); got != "windows-claude-swap-2026-07-23_2055.csb" {
+	if got := defaultBackupFilename(now, false); got != "claude-desktop-switcher-2026-07-23_2055.csb" {
 		t.Fatalf("local filename = %q", got)
 	}
-	if got := defaultBackupFilename(now, true); got != "windows-claude-swap-2026-07-23_2055-pw.csb" {
+	if got := defaultBackupFilename(now, true); got != "claude-desktop-switcher-2026-07-23_2055-pw.csb" {
 		t.Fatalf("password filename = %q", got)
 	}
 }

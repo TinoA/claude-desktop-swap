@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://github.com/TinoA/claude-desktop-swap">
-    <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Windows Claude Swap — Claude account switching for Windows" width="190">
+  <a href="https://github.com/TinoA/claude-desktop-switcher">
+    <img src="cmd/assets/windows-claude-swap-icon-v2.png" alt="Claude Desktop Switcher — Claude account switching for Windows" width="190">
   </a>
 </p>
 
-<h1 align="center">Windows Claude Swap</h1>
+<h1 align="center">Claude Desktop Switcher</h1>
 
 <p align="center">
   Switch between Claude Desktop accounts from the Windows system tray.<br>
@@ -12,21 +12,21 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest/download/Windows-Claude-Swap-Setup-amd64.exe">
+  <a href="https://github.com/TinoA/claude-desktop-switcher/releases/latest/download/Claude-Desktop-Switcher-Setup-amd64.exe">
     <img src="https://img.shields.io/badge/Download_for_Windows_x64-2F2D2A?style=for-the-badge&logo=windows11&logoColor=white" alt="Download for Windows x64">
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest">All downloads</a>
+  <a href="https://github.com/TinoA/claude-desktop-switcher/releases/latest">All downloads</a>
   ·
-  <a href="https://github.com/TinoA/claude-desktop-swap/releases/latest/download/Windows-Claude-Swap-Setup-arm64.exe">Windows ARM64</a>
+  <a href="https://github.com/TinoA/claude-desktop-switcher/releases/latest/download/Claude-Desktop-Switcher-Setup-arm64.exe">Windows ARM64</a>
   ·
-  <a href="https://github.com/TinoA/claude-desktop-swap/issues">Report a problem</a>
+  <a href="https://github.com/TinoA/claude-desktop-switcher/issues">Report a problem</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/v/release/TinoA/claude-desktop-swap?label=latest" alt="Latest release">
+  <img src="https://img.shields.io/github/v/release/TinoA/claude-desktop-switcher?label=latest" alt="Latest release">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white" alt="Windows 10 and 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
@@ -34,8 +34,8 @@
 ## Install in a minute
 
 1. Download the **Windows x64 installer** using the button above. If your Windows device uses an ARM processor, choose **Windows ARM64** instead.
-2. Open `Windows-Claude-Swap-Setup-amd64.exe`.
-3. Complete the installer and launch **Windows Claude Swap**.
+2. Open `Claude-Desktop-Switcher-Setup-amd64.exe`.
+3. Complete the installer and launch **Claude Desktop Switcher**.
 4. Find its icon in the Windows notification area. It may be inside the hidden-icons menu (`^`).
 
 The app installs for your Windows user and normally does not require administrator access. The installer can start it with Windows and adds a standard uninstaller.
@@ -55,7 +55,7 @@ The app installs for your Windows user and normally does not require administrat
 
 ### Switch accounts
 
-Right-click the tray icon, open **Accounts**, and select the account you want. Windows Claude Swap prepares the saved session and opens Claude Desktop again with that account.
+Right-click the tray icon, open **Accounts**, and select the account you want. Claude Desktop Switcher prepares the saved session and opens Claude Desktop again with that account.
 
 ### Add an account
 
@@ -78,7 +78,7 @@ For a complete backup, Claude Desktop may briefly close while the active profile
 
 ## Your sessions and chats
 
-Windows Claude Swap stores the local Claude Desktop data needed to reopen each account, including encrypted cookies and browser storage. On Windows, cookie values are copied in their encrypted form and are never decrypted, displayed, or written to logs.
+Claude Desktop Switcher stores the local Claude Desktop data needed to reopen each account, including encrypted cookies and browser storage. On Windows, cookie values are copied in their encrypted form and are never decrypted, displayed, or written to logs.
 
 Chats are not copied by this app. Conversation history belongs to each Claude account and is loaded by Claude Desktop from Anthropic when that account is active.
 
@@ -86,7 +86,7 @@ Claude or Anthropic may still request sign-in or device verification after a ses
 
 ## Backups and reinstalling
 
-Uninstalling Windows Claude Swap keeps your saved profiles by default, so reinstalling the app does not normally remove your accounts. Profiles are stored in:
+Uninstalling Claude Desktop Switcher keeps your saved profiles by default, so reinstalling the app does not normally remove your accounts. Profiles are stored in:
 
 ```text
 %USERPROFILE%\.claude-swap\profiles\<name>\
@@ -112,7 +112,7 @@ The app detects common Claude Desktop installations, including standard, Squirre
 
 ## Technical details
 
-Windows Claude Swap is a Go application with a native Windows tray interface. Account switching works by stopping Claude Desktop safely, checkpointing the current local session, restoring the selected profile, and starting Claude Desktop again.
+Claude Desktop Switcher is a Go application with a native Windows tray interface. Account switching works by stopping Claude Desktop safely, checkpointing the current local session, restoring the selected profile, and starting Claude Desktop again.
 
 Each profile can include:
 
@@ -146,7 +146,7 @@ GitHub Actions verifies module metadata, runs `go vet`, race-enabled tests, form
 
 The Windows installer uses a graphical build that opens the tray on double-click without showing a console window. CLI archives remain console applications.
 
-This Windows-focused project is maintained at [`TinoA/claude-desktop-swap`](https://github.com/TinoA/claude-desktop-swap) and is based on [`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
+This Windows-focused project is maintained at [`TinoA/claude-desktop-switcher`](https://github.com/TinoA/claude-desktop-switcher) and is based on [`FranCalveyra/claude-desktop-swap`](https://github.com/FranCalveyra/claude-desktop-swap).
 
 ## License
 

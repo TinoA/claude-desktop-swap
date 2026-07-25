@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to claude-desktop-swap.
+Thanks for your interest in contributing to Claude Desktop Switcher.
 
 ## Before you start
 

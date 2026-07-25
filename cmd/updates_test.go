@@ -25,8 +25,11 @@ func TestUpdateAvailableComparesStableVersions(t *testing.T) {
 }
 
 func TestGitHubPagesPointToThisRepository(t *testing.T) {
-	if githubRepoPage != "https://github.com/TinoA/claude-desktop-swap" {
+	if githubRepoPage != "https://github.com/TinoA/claude-desktop-switcher" {
 		t.Fatalf("githubRepoPage = %q", githubRepoPage)
+	}
+	if githubReleaseAPI != "https://api.github.com/repos/TinoA/claude-desktop-switcher/releases/latest" {
+		t.Fatalf("githubReleaseAPI = %q", githubReleaseAPI)
 	}
 	if githubReleasePage != githubRepoPage+"/releases/latest" {
 		t.Fatalf("githubReleasePage = %q", githubReleasePage)

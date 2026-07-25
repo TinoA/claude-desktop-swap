@@ -15,6 +15,15 @@ func TestWindowsInstallerUsesNativeLauncher(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(data)
+	for _, required := range []string{
+		"AppName=Claude Desktop Switcher",
+		"AppPublisherURL=https://github.com/TinoA/claude-desktop-switcher",
+		"OutputBaseFilename=Claude-Desktop-Switcher-Setup-{#AppArch}",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("installer is missing %q", required)
+		}
+	}
 	launcher := `Filename: "{app}\windows-claude-swap-launcher.exe"`
 	if count := strings.Count(script, launcher); count != 3 {
 		t.Fatalf("native launcher invocation count = %d, want 3", count)
@@ -32,8 +41,8 @@ func TestWindowsInstallerUsesNativeLauncher(t *testing.T) {
 		t.Fatal("installer still depends on the rundll32 compatibility relay")
 	}
 	for _, shortcut := range []string{
-		`Name: "{userprograms}\Windows Claude Swap"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"`,
-		`Name: "{userstartup}\Windows Claude Swap"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"; Tasks: startup`,
+		`Name: "{userprograms}\Claude Desktop Switcher"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"`,
+		`Name: "{userstartup}\Claude Desktop Switcher"; Filename: "{app}\windows-claude-swap-launcher.exe"; WorkingDir: "{app}"; IconFilename: "{app}\windows-claude-swap-icon-v2.ico"; Tasks: startup`,
 	} {
 		if !strings.Contains(script, shortcut) {
 			t.Fatalf("installer shortcut changed: missing %q", shortcut)

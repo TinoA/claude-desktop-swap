@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/platform"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 	"github.com/getlantern/systray"
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/windows"
@@ -38,7 +38,7 @@ var (
 
 var cmdTray = &cobra.Command{
 	Use:   "tray",
-	Short: "Run Windows Claude Swap in the system tray",
+	Short: "Run Claude Desktop Switcher in the system tray",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runTray()
@@ -90,7 +90,7 @@ func runTray() (resultErr error) {
 		if recovered := recover(); recovered != nil {
 			resultErr = fmt.Errorf("tray startup panic: %v", recovered)
 			logStartup(resultErr.Error())
-			trayWarning("Could not start Windows Claude Swap", resultErr.Error())
+			trayWarning("Could not start "+ProductName, resultErr.Error())
 		}
 	}()
 
@@ -138,13 +138,13 @@ func (s *trayState) ready() {
 	s.exportPassword = s.export.AddSubMenuItem("Password-protected...", "Create a portable, password-protected backup")
 	s.exportLocal = s.export.AddSubMenuItem("Without password...", "Protect the backup with this Windows account")
 	s.importer = systray.AddMenuItem("Import backup", "Automatically detect and restore a backup")
-	s.update = systray.AddMenuItem("New version available", "Open the latest Windows Claude Swap release")
+	s.update = systray.AddMenuItem("New version available", "Open the latest Claude Desktop Switcher release")
 	s.update.Hide()
 	systray.AddSeparator()
 	s.claude = systray.AddMenuItem("Claude Desktop: Checking...", "Open or close Claude Desktop")
 	s.claude.Disable()
 	logs := systray.AddMenuItem("Open logs folder", "Open local diagnostic activity logs")
-	s.version = systray.AddMenuItem("Current version: "+displayVersion(Version), "Open the Windows Claude Swap GitHub repository")
+	s.version = systray.AddMenuItem("Current version: "+displayVersion(Version), "Open the Claude Desktop Switcher GitHub repository")
 	quit := systray.AddMenuItem("Exit", "Close the tray icon")
 
 	s.loadAccounts()
@@ -168,7 +168,7 @@ func (s *trayState) ready() {
 	go s.monitorUpdates()
 	if s.activityLogErr != nil {
 		logs.Disable()
-		go trayWarning("Logging unavailable", "Windows Claude Swap could not create its local logs folder.\n\n"+s.activityLogErr.Error())
+		go trayWarning("Logging unavailable", ProductName+" could not create its local logs folder.\n\n"+s.activityLogErr.Error())
 	}
 }
 
@@ -406,7 +406,7 @@ func (s *trayState) handleBackupImport() {
 				} else if len(profiles) > 0 {
 					confirmed, confirmErr := nativeTrayConfirm(
 						"Replace saved accounts?",
-						"Importing this backup will replace all accounts currently saved in Windows Claude Swap.\n\nClaude Desktop's open session will not be changed.\n\nContinue?",
+						"Importing this backup will replace all accounts currently saved in Claude Desktop Switcher.\n\nClaude Desktop's open session will not be changed.\n\nContinue?",
 					)
 					if confirmErr != nil {
 						lockErr = confirmErr
@@ -929,7 +929,7 @@ func (s *trayState) detectInitialAccountAfterLaunch() {
 func (s *trayState) saveInitialDetectedAccount(running bool) {
 	saveAccount, err := nativeTrayConfirm(
 		"Save this Claude account?",
-		"Claude Desktop is already signed in.\n\nSave this account in Windows Claude Swap? Claude Desktop will close and reopen once.",
+		"Claude Desktop is already signed in.\n\nSave this account in Claude Desktop Switcher? Claude Desktop will close and reopen once.",
 	)
 	if err != nil || !saveAccount {
 		s.setStatus("Account not saved; choose Add account... when ready")

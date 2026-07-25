@@ -5,7 +5,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/platform"
+	"github.com/TinoA/claude-desktop-switcher/internal/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -13,11 +13,11 @@ import (
 var Version = "dev"
 var dryRun bool
 
-const ProductName = "Windows Claude Swap"
+const ProductName = "Claude Desktop Switcher"
 
 var root = &cobra.Command{
-	Use:     "claude-desktop-swap",
-	Short:   "Windows Claude Swap: switch Claude Desktop accounts without logging out",
+	Use:     "claude-desktop-switcher",
+	Short:   "Claude Desktop Switcher: switch Claude Desktop accounts without logging out",
 	Version: Version,
 }
 

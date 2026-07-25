@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/profile"
+	"github.com/TinoA/claude-desktop-switcher/internal/profile"
 )
 
 func TestPrepareBackupRefreshesMatchedAccountAndRelaunchesClaude(t *testing.T) {

@@ -1,6 +1,6 @@
 # Architecture
 
-Windows Claude Swap keeps the command-line core and the Windows tray in one Go
+Claude Desktop Switcher keeps the command-line core and the Windows tray in one Go
 binary. Platform-specific files isolate Windows and macOS behavior with Go build
 tags.
 

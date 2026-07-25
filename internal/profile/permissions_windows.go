@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/FranCalveyra/claude-desktop-swap/internal/winproc"
+	"github.com/TinoA/claude-desktop-switcher/internal/winproc"
 )
 
 func securePath(path string) error {
