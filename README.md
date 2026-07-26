@@ -4,10 +4,6 @@
   </a>
 </p>
 
-<p align="center">
-  <img src="docs/assets/tray-menu-preview.png" alt="Claude Desktop Switcher account menu in the Windows system tray" width="900">
-</p>
-
 <h1 align="center">Claude Desktop Switcher</h1>
 
 <p align="center">
@@ -33,6 +29,10 @@
   <img src="https://img.shields.io/github/v/release/TinoA/claude-desktop-switcher?label=latest" alt="Latest release">
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white" alt="Windows 10 and 11">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/tray-menu-preview.png" alt="Claude Desktop Switcher account menu in the Windows system tray" width="900">
 </p>
 
 ## Install in a minute
