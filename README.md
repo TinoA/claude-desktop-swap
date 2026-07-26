@@ -31,6 +31,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/tray-menu-preview.png" alt="Claude Desktop Switcher account menu in the Windows system tray" width="900">
+</p>
+
 ## Install in a minute
 
 1. Download the **Windows x64 installer** using the button above. If your Windows device uses an ARM processor, choose **Windows ARM64** instead.
